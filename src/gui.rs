@@ -24,8 +24,10 @@ unsafe extern "C" {
     fn gtk_window_set_position(window: W, position: c_int);
     fn gtk_window_set_icon_name(window: W, name: *const c_char);
     fn gtk_box_new(orientation: c_int, spacing: c_int) -> W;
+    fn gtk_box_set_homogeneous(container: W, homogeneous: c_int);
     fn gtk_box_pack_start(container: W, child: W, expand: c_int, fill: c_int, padding: c_uint);
     fn gtk_container_add(container: W, child: W);
+    fn gtk_container_child_set(container: W, child: W, first_property: *const c_char, ...);
     fn gtk_container_set_border_width(container: W, width: c_uint);
     fn gtk_widget_show_all(widget: W);
     fn gtk_widget_destroy(widget: W);
@@ -34,8 +36,15 @@ unsafe extern "C" {
     fn gtk_widget_set_tooltip_text(widget: W, text: *const c_char);
     fn gtk_widget_set_size_request(widget: W, width: c_int, height: c_int);
     fn gtk_widget_set_hexpand(widget: W, expand: c_int);
+    fn gtk_widget_set_valign(widget: W, align: c_int);
+    fn gtk_widget_get_allocated_width(widget: W) -> c_int;
+    fn gtk_widget_get_allocated_height(widget: W) -> c_int;
+    fn gtk_widget_draw(widget: W, cairo: W);
     fn gtk_widget_get_style_context(widget: W) -> W;
     fn gtk_style_context_add_class(context: W, class: *const c_char);
+    fn gtk_style_context_has_class(context: W, class: *const c_char) -> c_int;
+    fn gtk_size_group_new(mode: c_int) -> W;
+    fn gtk_size_group_add_widget(group: W, widget: W);
     fn gtk_label_new(text: *const c_char) -> W;
     fn gtk_label_set_text(label: W, text: *const c_char);
     fn gtk_label_set_xalign(label: W, align: f32);
@@ -103,6 +112,15 @@ unsafe extern "C" {
 unsafe extern "C" {
     fn gdk_screen_get_default() -> W;
 }
+#[link(name = "cairo")]
+unsafe extern "C" {
+    fn cairo_image_surface_create(format: c_int, width: c_int, height: c_int) -> W;
+    fn cairo_create(surface: W) -> W;
+    fn cairo_destroy(cairo: W);
+    fn cairo_status(cairo: W) -> c_int;
+    fn cairo_surface_destroy(surface: W);
+    fn cairo_surface_write_to_png(surface: W, path: *const c_char) -> c_int;
+}
 #[link(name = "gobject-2.0")]
 unsafe extern "C" {
     fn g_signal_connect_data(
@@ -156,6 +174,32 @@ fn pack(container: W, child: W, expand: bool) {
 }
 fn box_new(vertical: bool, spacing: i32) -> W {
     unsafe { gtk_box_new(vertical.into(), spacing) }
+}
+/// Equal columns for action buttons, without stretching input fields or labels.
+fn action_row() -> W {
+    let row = box_new(false, 10);
+    unsafe {
+        gtk_box_set_homogeneous(row, 1);
+    }
+    style(row, "actions");
+    row
+}
+fn notebook_page(notebook: W, page: W, title: &str, tabs: W) {
+    let tab = label(title, "tab-label");
+    unsafe {
+        gtk_label_set_xalign(tab, 0.5);
+        gtk_size_group_add_widget(tabs, tab);
+        gtk_notebook_append_page(notebook, page, tab);
+        gtk_container_child_set(
+            notebook,
+            page,
+            c"tab-expand".as_ptr(),
+            1 as c_int,
+            c"tab-fill".as_ptr(),
+            1 as c_int,
+            ptr::null::<c_char>(),
+        );
+    }
 }
 fn set_label(w: W, text: &str) {
     unsafe {
@@ -237,6 +281,7 @@ struct App {
     log_buffer: W,
     fields: Fields,
     buttons: Vec<W>,
+    utility_buttons: W,
     signals: Vec<SignalHolder>,
     child: Option<Child>,
     action: String,
@@ -263,6 +308,12 @@ struct App {
     player_changed_at: i64,
     updating_player: bool,
     player_signal: u64,
+    capture: Option<Capture>,
+}
+struct Capture {
+    output: std::path::PathBuf,
+    page: usize,
+    error: Option<String>,
 }
 // Heap allocations keep signal pointers stable as the vector grows.
 struct SignalHolder(Box<Signal>);
@@ -273,6 +324,26 @@ impl App {
             let button = gtk_button_new_with_label(c(title).as_ptr());
             if primary {
                 style(button, "primary");
+            }
+            gtk_widget_set_valign(button, 3); // GTK_ALIGN_CENTER
+            gtk_widget_set_size_request(button, -1, 44);
+            let equal_columns = gtk_style_context_has_class(
+                gtk_widget_get_style_context(parent),
+                c"actions".as_ptr(),
+            ) != 0;
+            if !equal_columns
+                && matches!(
+                    action,
+                    Action::Browse(_, _)
+                        | Action::ModFilter
+                        | Action::ModFile
+                        | Action::ModImport
+                        | Action::Work("servers-refresh" | "mods-refresh")
+                        | Action::Stop
+                )
+            {
+                gtk_widget_set_size_request(button, 156, 44);
+                gtk_size_group_add_widget(self.utility_buttons, button);
             }
             let mut signal = SignalHolder(Box::new(Signal { app: self, action }));
             let pointer: W = (&mut *signal.0 as *mut Signal).cast();
@@ -288,7 +359,7 @@ impl App {
                 0,
             );
             self.signals.push(signal);
-            pack(parent, button, false);
+            pack(parent, button, equal_columns);
             if matches!(
                 action,
                 Action::Work(_) | Action::Play | Action::Save | Action::ChooseInstaller
@@ -301,7 +372,7 @@ impl App {
 
     fn file_field(&mut self, parent: W, title: &str, value: &str, folder: bool) -> W {
         pack(parent, label(title, "field-label"), false);
-        let row = box_new(false, 8);
+        let row = box_new(false, 10);
         let field = entry(value);
         unsafe {
             gtk_widget_set_hexpand(field, 1);
@@ -489,6 +560,9 @@ impl App {
     }
 
     fn dispatch(&mut self, action: Action) -> Result<()> {
+        if self.capture.is_some() {
+            return Ok(());
+        }
         match action {
             Action::Work(op) => self.start(op)?,
             Action::PlayerChanged => {
@@ -717,7 +791,7 @@ impl App {
         let controls = box_new(true, 8);
         self.player_controls = controls;
         pack(controls, label("СЕРВЕР И ИГРОК", "field-label"), false);
-        let row = box_new(false, 8);
+        let row = box_new(false, 10);
         self.server_combo = unsafe { gtk_combo_box_text_new() };
         pack(row, self.server_combo, true);
         self.button(
@@ -727,7 +801,7 @@ impl App {
             false,
         );
         pack(controls, row, false);
-        let row = box_new(false, 8);
+        let row = box_new(false, 10);
         pack(row, label("Никнейм", "field-label"), false);
         self.nickname_entry = entry(&self.player.nickname);
         unsafe {
@@ -776,7 +850,7 @@ impl App {
                 ),
                 false,
             );
-            let search_row = box_new(false, 8);
+            let search_row = box_new(false, 10);
             self.mod_search = entry("");
             gtk_entry_set_placeholder_text(
                 self.mod_search,
@@ -810,13 +884,13 @@ impl App {
             );
             pack(page, gtk_separator_new(0), false);
             pack(page, label("Добавить свой мод", "field-label"), false);
-            let row = box_new(false, 8);
+            let row = box_new(false, 10);
             self.mod_file = entry("");
             gtk_entry_set_placeholder_text(self.mod_file, c"ZIP, RAR, 7z, ASI, CS, Lua…".as_ptr());
             pack(row, self.mod_file, true);
             self.button(row, "Файл…", Action::ModFile, false);
             pack(page, row, false);
-            let row = box_new(false, 8);
+            let row = box_new(false, 10);
             self.mod_target = gtk_combo_box_text_new();
             for text in [
                 "Куда: автоматически",
@@ -846,7 +920,7 @@ impl App {
             );
             self.installed_combo = gtk_combo_box_text_new();
             pack(page, self.installed_combo, false);
-            let row = box_new(false, 8);
+            let row = action_row();
             for (name, op) in [
                 ("Включить", "mods-enable"),
                 ("Отключить", "mods-disable"),
@@ -1075,6 +1149,64 @@ unsafe extern "C" fn smoke_quit(_: W) -> c_int {
     0
 }
 
+unsafe extern "C" fn capture_tick(data: W) -> c_int {
+    let app = unsafe { &mut *(data as *mut App) };
+    let capture = app
+        .capture
+        .as_ref()
+        .expect("capture timer belongs to demo mode");
+    let names = ["main.png", "settings.png", "mods.png"];
+    let result = (|| {
+        let (width, height) = unsafe {
+            (
+                gtk_widget_get_allocated_width(app.window),
+                gtk_widget_get_allocated_height(app.window),
+            )
+        };
+        if !(1..=4096).contains(&width) || !(1..=4096).contains(&height) {
+            return Err("Некорректный размер окна для скриншота".into());
+        }
+        let output = capture.output.join(names[capture.page]);
+        unsafe {
+            let surface = cairo_image_surface_create(0, width, height); // CAIRO_FORMAT_ARGB32
+            let cairo = cairo_create(surface);
+            gtk_widget_draw(app.window, cairo);
+            let status = cairo_status(cairo);
+            cairo_destroy(cairo);
+            let saved = if status == 0 {
+                cairo_surface_write_to_png(surface, c(&output.to_string_lossy()).as_ptr())
+            } else {
+                status
+            };
+            cairo_surface_destroy(surface);
+            if saved != 0 {
+                return Err("Не удалось сохранить PNG окна GTK".into());
+            }
+        }
+        println!("Сохранён скриншот: {}", names[capture.page]);
+        Ok(())
+    })();
+    let capture = app.capture.as_mut().expect("demo capture");
+    if let Err(error) = result {
+        capture.error = Some(error);
+        unsafe {
+            gtk_main_quit();
+        }
+        return 0;
+    }
+    capture.page += 1;
+    if capture.page == names.len() {
+        unsafe {
+            gtk_main_quit();
+        }
+        return 0;
+    }
+    unsafe {
+        gtk_notebook_set_current_page(app.notebook, capture.page as c_int);
+    }
+    1
+}
+
 const CSS: &str = r#"
 window { background: #12131a; color: #ebedf5; }
 * { font-family: Sans; font-size: 14px; }
@@ -1085,16 +1217,19 @@ window { background: #12131a; color: #ebedf5; }
 .runtime { color: #c8bbff; font-size: 13px; }
 .field-label { font-size: 12px; color: #b8bcce; margin-top: 6px; }
 .card { background: #1c1e2a; border-radius: 16px; padding: 24px; }
-button { background: #292c3c; color: #e4e6f1; border: 1px solid #3a3e54; border-radius: 9px; padding: 10px 15px; box-shadow: none; text-shadow: none; }
-button:hover { background: #373b50; }
-button.primary { background: #aa91ff; color: #171223; border-color: #aa91ff; font-weight: 800; padding: 15px 24px; }
-button.primary:hover { background: #c0adff; }
+button { background: #292c3c; color: #e4e6f1; border: 1px solid #3a3e54; border-radius: 10px; min-height: 20px; padding: 11px 16px; box-shadow: none; text-shadow: none; transition: background-color 120ms ease, border-color 120ms ease; }
+button:hover { background: #35394d; border-color: #646281; }
+button:active { background: #232638; }
+button:focus { border-color: #bcacff; box-shadow: 0 0 0 2px alpha(#bcacff, 0.18); }
+button.primary { background: #aa91ff; color: #171223; border-color: #aa91ff; font-weight: 700; }
+button.primary:hover { background: #c0adff; border-color: #c0adff; }
+button.primary:active { background: #9b80ef; }
 button:disabled { opacity: 0.45; }
-entry, combobox entry { background: #1c1e2a; color: #eceef6; border: 1px solid #383c50; border-radius: 7px; padding: 7px; }
+entry, combobox entry { background: #1c1e2a; color: #eceef6; border: 1px solid #383c50; border-radius: 10px; min-height: 20px; padding: 11px 12px; }
 entry:focus { border-color: #aa91ff; }
 notebook, notebook > stack { background: transparent; border: none; }
 notebook > header { background: transparent; border: none; }
-notebook > header tabs tab { background: transparent; color: #a0a5b9; border: none; padding: 12px 18px; }
+notebook > header tabs tab { background: transparent; color: #a0a5b9; border: none; border-bottom: 2px solid transparent; padding: 12px 18px; }
 notebook > header tabs tab:checked { color: #d1c4ff; border-bottom: 2px solid #aa91ff; }
 textview, textview text { background: #171923; color: #bfc8dc; font-family: monospace; font-size: 12px; }
 checkbutton { color: #c7cbd9; padding: 4px 0; }
@@ -1109,6 +1244,9 @@ list row:hover { background: #292c3c; }
 "#;
 
 pub fn run() -> Result<()> {
+    run_mode(None)
+}
+pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()> {
     let settings = Settings::load()?;
     let player = PlayerProfile::load(&settings)?;
     let game_options = GameOptions::load(&settings)?;
@@ -1135,6 +1273,7 @@ pub fn run() -> Result<()> {
         pack(header, brand, true);
         pack(outer, header, false);
         let notebook = gtk_notebook_new();
+        let tab_sizes = gtk_size_group_new(1);
         pack(outer, notebook, true);
         let home = box_new(true, 16);
         gtk_container_set_border_width(home, 12);
@@ -1172,7 +1311,7 @@ pub fn run() -> Result<()> {
         let status = label("", "body");
         let spinner = gtk_spinner_new();
         let footer = box_new(false, 10);
-        gtk_widget_set_size_request(status, 440, -1);
+        gtk_widget_set_size_request(status, 160, -1);
         pack(footer, spinner, false);
         pack(footer, status, true);
         let empty = Fields {
@@ -1202,6 +1341,7 @@ pub fn run() -> Result<()> {
             log_buffer: gtk_text_view_get_buffer(view),
             fields: empty,
             buttons: Vec::new(),
+            utility_buttons: gtk_size_group_new(1),
             signals: Vec::new(),
             child: None,
             action: String::new(),
@@ -1228,10 +1368,15 @@ pub fn run() -> Result<()> {
             player_changed_at: g_get_monotonic_time(),
             updating_player: false,
             player_signal: 0,
+            capture: capture_output.map(|output| Capture {
+                output,
+                page: 0,
+                error: None,
+            }),
         });
         let player_controls = app.build_player_controls()?;
         pack(home, player_controls, false);
-        let play_row = box_new(false, 10);
+        let play_row = action_row();
         app.play = app.button(play_row, "Установить Arizona  →", Action::Play, true);
         app.button(play_row, "Обновить игру", Action::Work("launch"), false);
         app.button(play_row, "Папка игры", Action::Folder, false);
@@ -1241,7 +1386,7 @@ pub fn run() -> Result<()> {
         gtk_expander_set_expanded(expander, game::game_executable(&settings).is_err().into());
         gtk_container_add(expander, maintenance);
         pack(home, expander, false);
-        let installer_row = box_new(false, 8);
+        let installer_row = action_row();
         app.button(
             installer_row,
             "Выбрать установщик .exe…",
@@ -1263,7 +1408,7 @@ pub fn run() -> Result<()> {
             label("УСТАНОВКА И ВОССТАНОВЛЕНИЕ", "field-label"),
             false,
         );
-        let row = box_new(false, 8);
+        let row = action_row();
         app.button(
             row,
             "Подготовить Proton / Wine",
@@ -1272,11 +1417,11 @@ pub fn run() -> Result<()> {
         );
         app.button(row, "Установить лаунчер", Action::Work("install"), false);
         pack(maintenance, row, false);
-        let row = box_new(false, 8);
+        let row = action_row();
         app.button(row, "Починить окружение", Action::Work("repair"), false);
         app.button(row, "Шрифты и Visual C++", Action::Work("libraries"), false);
         pack(maintenance, row, false);
-        let row = box_new(false, 8);
+        let row = action_row();
         app.button(
             row,
             "Сбросить графику GTA",
@@ -1285,18 +1430,20 @@ pub fn run() -> Result<()> {
         );
         app.button(row, "Диагностика", Action::Work("doctor"), false);
         pack(maintenance, row, false);
+        let row = action_row();
         app.button(
-            maintenance,
+            row,
             "Починить запуск игры",
             Action::Work("repair-game"),
             false,
         );
         app.button(
-            maintenance,
+            row,
             "Исправить русский текст",
             Action::Work("repair-language"),
             false,
         );
+        pack(maintenance, row, false);
         pack(
             maintenance,
             label(
@@ -1308,17 +1455,17 @@ pub fn run() -> Result<()> {
         let home_scroller = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
         gtk_scrolled_window_set_policy(home_scroller, 2, 1);
         gtk_container_add(home_scroller, home);
-        gtk_notebook_append_page(notebook, home_scroller, label("Играть", "body"));
+        notebook_page(notebook, home_scroller, "Играть", tab_sizes);
         let settings_scroller = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
         gtk_scrolled_window_set_policy(settings_scroller, 2, 1);
         gtk_container_add(settings_scroller, settings_page);
-        gtk_notebook_append_page(notebook, settings_scroller, label("Настройки", "body"));
+        notebook_page(notebook, settings_scroller, "Настройки", tab_sizes);
         let mods_page = app.build_mods();
         let mods_scroller = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
         gtk_scrolled_window_set_policy(mods_scroller, 2, 1);
         gtk_container_add(mods_scroller, mods_page);
-        gtk_notebook_append_page(notebook, mods_scroller, label("Моды", "body"));
-        gtk_notebook_append_page(notebook, log_page, label("Журнал", "body"));
+        notebook_page(notebook, mods_scroller, "Моды", tab_sizes);
+        notebook_page(notebook, log_page, "Журнал", tab_sizes);
         pack(settings_page, label("Настройки Arizona", "title"), false);
         pack(settings_page, label("Память игры", "field-label"), false);
         app.game_memory = gtk_combo_box_text_new();
@@ -1447,7 +1594,7 @@ pub fn run() -> Result<()> {
             debug,
             no_sync,
         };
-        let row = box_new(false, 8);
+        let row = action_row();
         app.button(row, "Сохранить", Action::Save, true);
         app.button(row, "Настройки Wine", Action::Work("winecfg"), false);
         pack(settings_page, row, false);
@@ -1472,17 +1619,44 @@ pub fn run() -> Result<()> {
         let timer = g_timeout_add(400, Some(tick), (&mut *app as *mut App).cast());
         gtk_widget_set_name(window, c"alol".as_ptr());
         gtk_widget_show_all(window);
+        if app.capture.is_some() {
+            set_label(app.status, "Демонстрационный профиль · Nick_Name");
+        }
+        // Allow GTK to map and allocate each page before drawing it.
+        let capture_timer = if app.capture.is_some() {
+            g_timeout_add(900, Some(capture_tick), (&mut *app as *mut App).cast())
+        } else {
+            0
+        };
         if std::env::args().any(|a| a == "--smoke-test") {
             g_timeout_add(1400, Some(smoke_quit), ptr::null_mut());
         }
         gtk_main();
         g_source_remove(timer);
+        if capture_timer != 0
+            && app
+                .capture
+                .as_ref()
+                .is_some_and(|c| c.page < 3 && c.error.is_none())
+        {
+            g_source_remove(capture_timer);
+        }
         if app.player_signal != 0 {
             g_signal_handler_block(app.server_combo, app.player_signal);
         }
         // Keep worker alive if the window is closed: the game and downloads continue.
         // GTK owns the widgets; destroy them before dropping callback storage.
         gtk_widget_destroy(window);
+        g_object_unref(app.utility_buttons);
+        g_object_unref(tab_sizes);
+        if let Some(capture) = &app.capture {
+            if let Some(error) = &capture.error {
+                return Err(error.clone());
+            }
+            if capture.page != 3 {
+                return Err("Съёмка прервана до сохранения всех трёх экранов".into());
+            }
+        }
     }
     Ok(())
 }

@@ -38,7 +38,8 @@ fi
 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin main
 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin "v$alol_version"
 alol_artifacts=("dist/alol-$alol_version-1-x86_64.pkg.tar.zst" \
-    "dist/alol-$alol_version.tar.gz" dist/PKGBUILD dist/SHA256SUMS)
+    "dist/alol-$alol_version.tar.gz" dist/PKGBUILD dist/SHA256SUMS \
+    docs/screenshots/main.png docs/screenshots/settings.png docs/screenshots/mods.png)
 if gh release view "v$alol_version" --repo "$alol_repo" >/dev/null 2>&1; then
     gh release upload "v$alol_version" --repo "$alol_repo" --clobber "${alol_artifacts[@]}"
 else

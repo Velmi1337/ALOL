@@ -18,6 +18,8 @@ EMAIL = re.compile(rb"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 
 def audit_bytes(name, data):
+    if name.endswith(".png"):
+        source.audit_png(name, data)
     if source.SECRETS.search(data) or EMAIL.search(data):
         raise ValueError(f"Potential private data in {name} (value hidden)")
 
@@ -29,6 +31,8 @@ def main():
     metadata = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]
     version = metadata["version"]
     files = source.source_files()
+    if not source.SCREENSHOTS.issubset({path.relative_to(ROOT).as_posix() for path in files}):
+        raise ValueError("Capture all three demo screenshots before publishing")
     if (ROOT / ".git").exists():
         tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
         expected_paths = {path.relative_to(ROOT).as_posix() for path in files}
@@ -74,7 +78,7 @@ def main():
     source_hash = hashlib.sha256(archive.read_bytes()).hexdigest().encode()
     if source_hash not in data or b"@VERSION@" in data or b"@SHA256@" in data:
         raise ValueError("PKGBUILD source checksum was not generated correctly")
-    artifacts = [archive, package, pkgbuild]
+    artifacts = [archive, package, pkgbuild, *[ROOT / name for name in sorted(source.SCREENSHOTS)]]
     (args.directory / "SHA256SUMS").write_text("".join(
         f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in artifacts
     ))
