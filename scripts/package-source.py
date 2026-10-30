@@ -6,6 +6,7 @@ import hashlib
 import io
 from pathlib import Path
 import re
+import shutil
 import struct
 import tarfile
 import tomllib
@@ -14,10 +15,10 @@ import zlib
 ROOT = Path(__file__).resolve().parents[1]
 TOP_LEVEL = (
     "Cargo.toml", "Cargo.lock", "LICENSE", "README.md", "CHANGELOG.md",
-    ".gitignore", ".gitattributes", "install.sh", "install-arch.sh",
+    ".gitignore", ".gitattributes", "install.sh", "install-arch.sh", "install-fedora.sh",
 )
-DIRECTORIES = ("src", "assets", "docs", "tests", "packaging", "scripts")
-EXTENSIONS = {".rs", ".py", ".sh", ".md", ".json", ".svg", ".desktop", ".in", ".png"}
+DIRECTORIES = ("src", "assets", "docs", "tests", "packaging", "scripts", ".github")
+EXTENSIONS = {".rs", ".py", ".sh", ".md", ".json", ".svg", ".desktop", ".in", ".png", ".yml"}
 SCREENSHOTS = {"docs/screenshots/main.png", "docs/screenshots/settings.png", "docs/screenshots/mods.png"}
 SECRETS = re.compile(rb"(?:/home/[A-Za-z0-9_.-]+|/Users/[A-Za-z0-9_.-]+|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----)")
 
@@ -87,6 +88,7 @@ def audit_png(name, data):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--archive", type=Path, help="Use an already-published, byte-verified source archive")
     args = parser.parse_args()
     metadata = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]
     version, repository = metadata["version"], metadata["repository"]
@@ -105,20 +107,35 @@ def main():
         if SECRETS.search(data):
             raise ValueError(f"Potential private data: {path.relative_to(ROOT)} (value hidden)")
         contents.append((path, data))
-    with archive.open("wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", filename="", mtime=0) as zipped:
-        with tarfile.open(fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT) as tar:
-            for path, data in contents:
-                entry = tarfile.TarInfo(f"alol-{version}/{path.relative_to(ROOT).as_posix()}")
-                entry.size = len(data)
-                entry.mode = 0o755 if path.suffix == ".sh" else 0o644
-                entry.uid = entry.gid = 0
-                entry.uname = entry.gname = ""
-                entry.mtime = 0
-                tar.addfile(entry, io.BytesIO(data))
+    if args.archive:
+        expected = {f"alol-{version}/{path.relative_to(ROOT).as_posix()}": data for path, data in contents}
+        with tarfile.open(args.archive) as tar:
+            members = tar.getmembers()
+            if len(members) != len(expected) or {m.name for m in members} != set(expected):
+                raise ValueError("Published source archive has unexpected files")
+            for member in members:
+                if (not member.isfile() or member.uid or member.gid or member.uname or member.gname
+                        or tar.extractfile(member).read() != expected[member.name]):
+                    raise ValueError("Published source archive differs from checked-out source")
+        shutil.copyfile(args.archive, archive)
+    else:
+        with archive.open("wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", filename="", mtime=0) as zipped:
+            with tarfile.open(fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT) as tar:
+                for path, data in contents:
+                    entry = tarfile.TarInfo(f"alol-{version}/{path.relative_to(ROOT).as_posix()}")
+                    entry.size = len(data)
+                    entry.mode = 0o755 if path.suffix == ".sh" else 0o644
+                    entry.uid = entry.gid = 0
+                    entry.uname = entry.gname = ""
+                    entry.mtime = 0
+                    tar.addfile(entry, io.BytesIO(data))
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     template = (ROOT / "packaging/arch/PKGBUILD.in").read_text()
     pkgbuild = template.replace("@VERSION@", version).replace("@REPOSITORY@", repository).replace("@SHA256@", digest)
     (args.output / "PKGBUILD").write_text(pkgbuild)
+    template = (ROOT / "packaging/fedora/alol.spec.in").read_text()
+    spec = template.replace("@VERSION@", version).replace("@REPOSITORY@", repository).replace("@SHA256@", digest)
+    (args.output / "alol.spec").write_text(spec)
     print(f"Source: {archive.name}; {len(files)} files; SHA256 {digest}")
 
 

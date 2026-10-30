@@ -4,6 +4,7 @@ import argparse
 import hashlib
 from pathlib import Path
 import re
+import stat
 import subprocess
 import tarfile
 import tomllib
@@ -24,9 +25,48 @@ def audit_bytes(name, data):
         raise ValueError(f"Potential private data in {name} (value hidden)")
 
 
+def audit_fedora(directory, version):
+    packages = sorted(directory.glob(f"alol-{version}-*.x86_64.rpm"))
+    if len(packages) != 1:
+        raise ValueError("Expected one native Fedora x86_64 RPM")
+    package = packages[0]
+    query = "%{NAME}\n%{VERSION}\n%{ARCH}\n%{PACKAGER}\n%{BUILDHOST}\n%{RELEASE}\n"
+    fields = subprocess.check_output(["rpm", "-qp", "--qf", query, str(package)], text=True).splitlines()
+    if (fields[:5] != ["alol", version, "x86_64", "ALOL contributors", "alol-builder"]
+            or not re.fullmatch(r"1\.fc[0-9]+", fields[5])):
+        raise ValueError("Unexpected RPM identity or private build metadata")
+    info = subprocess.check_output([
+        "rpm", "-qp", "--qf", "[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILEUSERNAME}\t%{FILEGROUPNAME}\n]", str(package)
+    ], text=True)
+    regular = set()
+    for line in info.splitlines():
+        name, mode, user, group = line.split("\t")
+        if (user, group) != ("root", "root"):
+            raise ValueError("Private RPM file owner metadata")
+        mode = int(mode, 8)
+        if stat.S_ISREG(mode):
+            regular.add(name.removeprefix("/"))
+        elif not stat.S_ISDIR(mode):
+            raise ValueError("Unexpected RPM link or special file")
+    expected = {
+        "usr/bin/alol", "usr/share/applications/alol.desktop",
+        "usr/share/icons/hicolor/scalable/apps/alol.svg",
+        "usr/share/licenses/alol/LICENSE", "usr/share/doc/alol/README.md",
+    }
+    if regular != expected:
+        raise ValueError("Unexpected payload in RPM")
+    names = subprocess.check_output(["bsdtar", "-tf", str(package)], text=True).splitlines()
+    paths = {name.removeprefix("./"): name for name in names}
+    for name in expected:
+        data = subprocess.check_output(["bsdtar", "-xOf", str(package), paths[name]])
+        audit_bytes(name, data)
+    return package
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path, nargs="?", default=ROOT / "dist")
+    parser.add_argument("--platform", choices=("arch", "fedora"), default="arch")
     args = parser.parse_args()
     metadata = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]
     version = metadata["version"]
@@ -54,35 +94,46 @@ def main():
             local = ROOT / member.name.split("/", 1)[1]
             if data != local.read_bytes():
                 raise ValueError(f"Source archive differs from checkout: {member.name}")
-    packages = sorted(args.directory.glob(f"alol-{version}-*-x86_64.pkg.tar.zst"))
-    if len(packages) != 1:
-        raise ValueError("Expected one x86_64 pacman package")
-    package = packages[0]
-    names = subprocess.check_output(["bsdtar", "-tf", str(package)], text=True).splitlines()
-    allowed = {
-        ".PKGINFO", ".MTREE", "usr/bin/alol",
-        "usr/share/applications/alol.desktop", "usr/share/icons/hicolor/scalable/apps/alol.svg",
-        "usr/share/licenses/alol/LICENSE", "usr/share/doc/alol/README.md",
-    }
-    actual = {name.removeprefix("./") for name in names if not name.endswith("/")}
-    if actual != allowed:
-        raise ValueError("Unexpected files in pacman package: " + ", ".join(sorted(actual ^ allowed)))
-    for name in sorted(actual - {".MTREE"}):
-        data = subprocess.check_output(["bsdtar", "-xOf", str(package), name])
-        audit_bytes(name, data)
-        if name == ".PKGINFO" and b"packager = ALOL contributors\n" not in data:
-            raise ValueError("Package author is not anonymous")
-    pkgbuild = args.directory / "PKGBUILD"
-    data = pkgbuild.read_bytes()
-    audit_bytes("PKGBUILD", data)
     source_hash = hashlib.sha256(archive.read_bytes()).hexdigest().encode()
+    spec = args.directory / "alol.spec"
+    data = spec.read_bytes()
+    audit_bytes("alol.spec", data)
     if source_hash not in data or b"@VERSION@" in data or b"@SHA256@" in data:
-        raise ValueError("PKGBUILD source checksum was not generated correctly")
-    artifacts = [archive, package, pkgbuild, *[ROOT / name for name in sorted(source.SCREENSHOTS)]]
-    (args.directory / "SHA256SUMS").write_text("".join(
+        raise ValueError("RPM spec source checksum was not generated correctly")
+    artifacts = [archive, spec]
+    if args.platform == "fedora":
+        artifacts.append(audit_fedora(args.directory, version))
+    else:
+        packages = sorted(args.directory.glob(f"alol-{version}-*-x86_64.pkg.tar.zst"))
+        if len(packages) != 1:
+            raise ValueError("Expected one x86_64 pacman package")
+        package = packages[0]
+        names = subprocess.check_output(["bsdtar", "-tf", str(package)], text=True).splitlines()
+        allowed = {
+            ".PKGINFO", ".MTREE", "usr/bin/alol",
+            "usr/share/applications/alol.desktop", "usr/share/icons/hicolor/scalable/apps/alol.svg",
+            "usr/share/licenses/alol/LICENSE", "usr/share/doc/alol/README.md",
+        }
+        actual = {name.removeprefix("./") for name in names if not name.endswith("/")}
+        if actual != allowed:
+            raise ValueError("Unexpected files in pacman package: " + ", ".join(sorted(actual ^ allowed)))
+        for name in sorted(actual - {".MTREE"}):
+            data = subprocess.check_output(["bsdtar", "-xOf", str(package), name])
+            audit_bytes(name, data)
+            if name == ".PKGINFO" and b"packager = ALOL contributors\n" not in data:
+                raise ValueError("Package author is not anonymous")
+        pkgbuild = args.directory / "PKGBUILD"
+        data = pkgbuild.read_bytes()
+        audit_bytes("PKGBUILD", data)
+        if source_hash not in data or b"@VERSION@" in data or b"@SHA256@" in data:
+            raise ValueError("PKGBUILD source checksum was not generated correctly")
+        artifacts.extend([package, pkgbuild])
+    artifacts.extend(ROOT / name for name in sorted(source.SCREENSHOTS))
+    manifest = "SHA256SUMS.fedora" if args.platform == "fedora" else "SHA256SUMS"
+    (args.directory / manifest).write_text("".join(
         f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in artifacts
     ))
-    print(f"Privacy audit passed: {len(files)} source files and {len(allowed)} package files; SHA256SUMS written.")
+    print(f"Privacy audit passed: {len(files)} source files and {args.platform} package; {manifest} written.")
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ Windows-лаунчер нужен для первоначальной загру
 Скачайте `.pkg.tar.zst` и установите через pacman:
 
 ```sh
-sudo pacman -U ./alol-0.5.2-1-x86_64.pkg.tar.zst
+sudo pacman -U ./alol-0.5.3-1-x86_64.pkg.tar.zst
 alol
 ```
 
@@ -76,14 +76,64 @@ cd ALOL
 ```
 
 В этом режиме зависимости должны быть установлены заранее. В `dist/` появятся
-пакет, исходники, готовый `PKGBUILD` и `SHA256SUMS`. Это локальная сборка;
+пакет, исходники, готовые `PKGBUILD`/`alol.spec` и `SHA256SUMS`. Это локальная сборка;
 публикация в AUR отдельно не выполняется.
 
 Пакет устанавливает `/usr/bin/alol` и пункт меню. Если раньше использовали
 `./install.sh`, копия `~/.local/bin/alol` может иметь приоритет в PATH:
 её можно удалить после установки пакета; пользовательские настройки сохраняются.
 
-### Локальная установка без pacman
+## Установка: Fedora
+
+Поддерживается Fedora 44+ x86_64 с `dnf`. В
+[GitHub Releases](https://github.com/Velmi1337/ALOL/releases) скачайте RPM:
+
+```sh
+sudo dnf install ./alol-0.5.3-1.fc44.x86_64.rpm
+alol
+```
+
+Fedora-пакет собирается в Fedora 44 и проверяется через GitHub Actions.
+Проверки включают тесты, установку RPM, запуск CLI и контроль отсутствия личных
+метаданных. Контрольные суммы находятся в `SHA256SUMS.fedora` того же релиза.
+Сборка Fedora запускается после публикации остальных файлов и может занять
+несколько минут; готовый RPM добавляется в тот же релиз после успешных проверок.
+
+RPM устанавливает Wine, winetricks и русскую локаль из репозиториев Fedora.
+При первом запуске новой конфигурации ALOL выбирает UMU/Proton, если `umu-run`
+доступен; иначе выбирает установленный Wine. Существующий выбор окружения
+сохраняется. Wine и Proton используют отдельные префиксы.
+
+Для GE-Proton можно установить подходящий Fedora RPM UMU из
+[официальных релизов UMU](https://github.com/Open-Wine-Components/umu-launcher/releases)
+и выбрать Proton в настройках ALOL. Совместимость самой игры с конкретной
+сборкой Wine/Proton проверяется отдельно от установки пакета.
+
+Сборка и установка из исходников:
+
+```sh
+sudo dnf install git python3
+git clone https://github.com/Velmi1337/ALOL.git
+cd ALOL
+./install-fedora.sh
+```
+
+Скрипт установит инструменты сборки через dnf, соберёт и проверит RPM, затем
+установит его. Для сборки без изменения системных пакетов сначала установите
+зависимости и используйте `--build-only`:
+
+```sh
+sudo dnf install rpm-build rust cargo gcc gtk3-devel glib2-devel cairo-devel \
+  libarchive-devel python3 desktop-file-utils bsdtar redhat-rpm-config
+./install-fedora.sh --build-only
+```
+
+Результат — RPM, `alol.spec`, исходники и `SHA256SUMS.fedora` в `dist/`.
+Сборку запускают обычным пользователем; sudo используется только для dnf.
+Эти инструкции рассчитаны на Fedora с dnf. Для Atomic-вариантов используйте
+подходящий toolbox для сборки и механизм установки пакетов своей системы.
+
+## Локальная установка без системного пакета
 
 Нужны Rust/Cargo, GTK 3, libarchive, curl, Python 3 и системный линкер.
 Cargo-зависимостей нет. На других дистрибутивах нужны development-пакеты
@@ -197,7 +247,7 @@ alol repair-game
 alol mods-add /путь/к/моду.zip
 ```
 
-Для пакета используйте `sudo pacman -R alol`. При локальной установке удалите `~/.local/bin/alol`,
+Для пакета используйте `sudo pacman -R alol` или `sudo dnf remove alol`. При локальной установке удалите `~/.local/bin/alol`,
 `~/.local/share/applications/alol.desktop` и
 `~/.local/share/icons/hicolor/scalable/apps/alol.svg`.
 Префиксы и пользовательские данные удаляются отдельно.
@@ -232,6 +282,12 @@ PNG проверяются на целостность и отсутствие �
 Для готового чистого Git-коммита и тега текущей версии команда
 `./scripts/publish.sh` повторяет проверку, публикует репозиторий и GitHub Release.
 Нужны авторизованный `gh` и доступ к GitHub. Скрипт не использует force push.
+После загрузки основных файлов он запускает workflow `Fedora RPM`, ждёт сборку
+и скачивает проверенный RPM. Для добавления workflow OAuth-токену GitHub CLI
+может понадобиться scope `workflow`: если GitHub отклонит push по этой причине,
+выполните `gh auth refresh -h github.com -s workflow` и повторите публикацию.
+Сам токен в файлы проекта или GitHub Actions secrets не копируется: workflow
+использует временный `GITHUB_TOKEN`, выдаваемый GitHub на время запуска.
 
 ## Лицензия
 

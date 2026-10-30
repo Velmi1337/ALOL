@@ -59,7 +59,12 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            runner: "proton".into(),
+            runner: if !available("umu-run") && available("wine") {
+                "wine"
+            } else {
+                "proton"
+            }
+            .into(),
             proton: "GE-Proton".into(),
             wine: "wine".into(),
             installer: String::new(),
@@ -223,7 +228,7 @@ impl Settings {
         self.validate()?;
         let mut c = if self.runner == "proton" {
             if !available("umu-run") {
-                return Err("Не найден umu-run. На Arch: sudo pacman -S umu-launcher".into());
+                return Err("Не найден umu-run. Установите UMU или выберите установленный Wine во вкладке «Настройки».".into());
             }
             if Path::new(&self.proton).is_absolute()
                 && !Path::new(&self.proton).join("proton").is_file()
@@ -240,7 +245,7 @@ impl Settings {
         } else {
             if !available(&self.wine) {
                 return Err(format!(
-                    "Wine не найден: {}. На Arch: sudo pacman -S wine-staging winetricks",
+                    "Wine не найден: {}. Установите Wine и winetricks средствами вашего дистрибутива.",
                     self.wine
                 ));
             }

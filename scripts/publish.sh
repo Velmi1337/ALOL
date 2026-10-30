@@ -33,12 +33,12 @@ else
     git remote add origin "$alol_remote"
 fi
 if ! gh repo view "$alol_repo" --json name >/dev/null 2>&1; then
-    gh repo create "$alol_repo" --public --description 'ALOL — Arizona Launcher On Linux. Native Rust launcher for Arch Linux and CachyOS.'
+    gh repo create "$alol_repo" --public --description 'ALOL — Arizona Launcher On Linux. Native Rust launcher for Arch Linux, CachyOS and Fedora.'
 fi
 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin main
 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin "v$alol_version"
 alol_artifacts=("dist/alol-$alol_version-1-x86_64.pkg.tar.zst" \
-    "dist/alol-$alol_version.tar.gz" dist/PKGBUILD dist/SHA256SUMS \
+    "dist/alol-$alol_version.tar.gz" dist/PKGBUILD dist/alol.spec dist/SHA256SUMS \
     docs/screenshots/main.png docs/screenshots/settings.png docs/screenshots/mods.png)
 if gh release view "v$alol_version" --repo "$alol_repo" >/dev/null 2>&1; then
     gh release upload "v$alol_version" --repo "$alol_repo" --clobber "${alol_artifacts[@]}"
@@ -46,4 +46,23 @@ else
     gh release create "v$alol_version" --repo "$alol_repo" --verify-tag \
         --title "ALOL $alol_version" --notes-file docs/release-notes.md "${alol_artifacts[@]}"
 fi
+printf '\nBuilding and testing the native Fedora RPM in GitHub Actions...\n'
+alol_dispatched_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+gh workflow run fedora-rpm.yml --repo "$alol_repo" --ref main -f "tag=v$alol_version"
+alol_run=''
+for alol_attempt in {1..20}; do
+    alol_run=$(gh run list --repo "$alol_repo" --workflow fedora-rpm.yml \
+        --event workflow_dispatch --commit "$(git rev-parse HEAD)" --created ">=$alol_dispatched_at" --limit 1 \
+        --json databaseId --jq '.[0].databaseId // empty')
+    if [[ -n $alol_run ]]; then break; fi
+    sleep 3
+done
+if [[ -z $alol_run ]]; then
+    echo 'Fedora build was dispatched but its run has not appeared yet. Check the Actions tab.' >&2
+    exit 1
+fi
+gh run watch "$alol_run" --repo "$alol_repo" --exit-status --interval 10
+gh release download "v$alol_version" --repo "$alol_repo" --dir dist --clobber \
+    --pattern "alol-$alol_version-*.x86_64.rpm" --pattern SHA256SUMS.fedora
+python3 scripts/verify-fedora-download.py dist
 printf '\nPublished: https://github.com/%s/releases/tag/v%s\n' "$alol_repo" "$alol_version"

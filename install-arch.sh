@@ -37,7 +37,7 @@ if [[ $alol_mode == --build-only ]]; then
 else
     makepkg --syncdeps --cleanbuild --clean --nosign --needed --force
 fi
-cp -- PKGBUILD alol-*.tar.gz "$alol_root/dist/"
+cp -- PKGBUILD alol.spec alol-*.tar.gz "$alol_root/dist/"
 mapfile -t alol_packages < <(makepkg --packagelist)
 if (( ${#alol_packages[@]} != 1 )) || [[ ! -f ${alol_packages[0]} ]]; then
     echo 'Expected exactly one completed alol package.' >&2

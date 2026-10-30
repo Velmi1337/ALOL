@@ -110,6 +110,19 @@ class Workflow(unittest.TestCase):
     def prefix(self):
         return self.data / "prefixes" / self.settings["runner"]
 
+    def test_new_profile_uses_available_wine_but_explicit_proton_never_switches_prefix(self):
+        self.config.unlink()
+        (self.bin/'umu-run').unlink()
+        self.env['PATH']=str(self.bin)
+        self.run_alol('prepare')
+        self.assertTrue(self.calls()[0]['prefix'].endswith('/prefixes/wine'))
+        self.assertEqual(Path(self.calls()[0]['prefix']).name,'wine')
+        count=len(self.calls())
+        self.write_config(runner='proton')
+        result=self.run_alol('prepare',success=False)
+        self.assertIn('umu-run',result.stderr)
+        self.assertEqual(len(self.calls()),count)
+
     def test_prepare_install_launch_and_pin_actual_build(self):
         self.run_alol("install")
         calls = self.calls()

@@ -1,0 +1,71 @@
+%global debug_package %{nil}
+%global _build_id_links none
+
+Name:           alol
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Native Arizona RP launcher for Linux
+License:        MIT
+URL:            @REPOSITORY@
+Source0:        alol-%{version}.tar.gz
+Packager:       ALOL contributors
+ExclusiveArch:  x86_64
+
+BuildRequires:  cargo
+BuildRequires:  rust
+BuildRequires:  gcc
+BuildRequires:  gtk3-devel
+BuildRequires:  glib2-devel
+BuildRequires:  cairo-devel
+BuildRequires:  libarchive-devel
+BuildRequires:  python3
+BuildRequires:  desktop-file-utils
+BuildRequires:  redhat-rpm-config
+
+Requires:       gtk3
+Requires:       glib2
+Requires:       cairo
+Requires:       libarchive
+Requires:       curl
+Requires:       coreutils
+Requires:       wine
+Requires:       winetricks
+Requires:       glibc-langpack-ru
+
+%description
+Lightweight native Rust/GTK launcher for Arizona RP. Includes server and
+nickname selection, game settings, mods, prefix maintenance and logs.
+Personal profiles and game files are not included.
+
+%prep
+printf '%%s\n' '@SHA256@  %{SOURCE0}' | sha256sum --check -
+%autosetup -n alol-%{version}
+
+%build
+export CARGO_HOME="$PWD/.cargo-build"
+export CARGO_INCREMENTAL=0
+export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=%{_builddir}=/usr/src/alol"
+cargo build --frozen --offline --release
+
+%check
+export CARGO_HOME="$PWD/.cargo-build"
+export CARGO_INCREMENTAL=0
+export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=%{_builddir}=/usr/src/alol"
+cargo test --frozen --offline
+desktop-file-validate assets/alol.desktop
+PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/mods_integration.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/game_integration.py
+
+%install
+install -Dm755 target/release/alol %{buildroot}%{_bindir}/alol
+install -Dm644 assets/alol.desktop %{buildroot}%{_datadir}/applications/alol.desktop
+install -Dm644 assets/alol.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/alol.svg
+
+%files
+%defattr(-,root,root,-)
+%license LICENSE
+%doc README.md
+%{_bindir}/alol
+%{_datadir}/applications/alol.desktop
+%{_datadir}/icons/hicolor/scalable/apps/alol.svg
