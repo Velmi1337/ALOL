@@ -1,0 +1,17 @@
+/target/
+/dist/
+/backups/
+/prefixes/
+/data/
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+*~
+.DS_Store
+/.env
+/.env.*
+/settings.conf
+/player.json
+/game-options.json
+/ArizonaLauncher.exe

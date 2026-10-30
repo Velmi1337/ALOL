@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=ALOL
+GenericName=Arizona Launcher On Linux
+Comment=Arizona RP через Wine и Proton
+Exec=alol
+TryExec=alol
+Icon=alol
+Terminal=false
+Categories=Game;
+Keywords=Arizona;RP;Wine;Proton;ALOL;
+StartupNotify=false
