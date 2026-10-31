@@ -2,9 +2,16 @@ ALOL 0.5.3 добавляет поддержку Fedora 44+ x86_64: нативн
 установщик для dnf и автоматическую сборку/проверку в Fedora через GitHub Actions.
 Симметричный интерфейс и скриншоты из отдельного демонстрационного профиля сохранены.
 
+<details>
+<summary><strong>Посмотреть скриншоты</strong></summary>
+
+Снимки сделаны с демонстрационным профилем; каталог модов содержит примеры.
+
 ![Главный экран](https://raw.githubusercontent.com/Velmi1337/ALOL/v0.5.3/docs/screenshots/main.png)
 ![Настройки](https://raw.githubusercontent.com/Velmi1337/ALOL/v0.5.3/docs/screenshots/settings.png)
 ![Моды](https://raw.githubusercontent.com/Velmi1337/ALOL/v0.5.3/docs/screenshots/mods.png)
+
+</details>
 
 ALOL — нативный лаунчер Arizona RP на Rust для Linux.
 
