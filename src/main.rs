@@ -5,6 +5,7 @@ mod game;
 mod game_options;
 mod gui;
 mod json;
+mod language;
 mod mods;
 mod screenshots;
 mod updates;

@@ -13,7 +13,7 @@
 Скачайте `.pkg.tar.zst` и установите через pacman:
 
 ```sh
-sudo pacman -U ./alol-0.5.5-1-x86_64.pkg.tar.zst
+sudo pacman -U ./alol-0.5.6-1-x86_64.pkg.tar.zst
 alol
 ```
 
@@ -56,7 +56,7 @@ cd ALOL
 [GitHub Releases](https://github.com/Velmi1337/ALOL/releases) скачайте RPM:
 
 ```sh
-sudo dnf install ./alol-0.5.5-1.fc44.x86_64.rpm
+sudo dnf install ./alol-0.5.6-1.fc44.x86_64.rpm
 alol
 ```
 
@@ -66,7 +66,8 @@ Fedora-пакет собирается в Fedora 44 и проверяется ч
 Сборка Fedora запускается после публикации остальных файлов и может занять
 несколько минут; готовый RPM добавляется в тот же релиз после успешных проверок.
 
-RPM устанавливает Wine, winetricks и русскую локаль из репозиториев Fedora.
+RPM устанавливает Wine и winetricks из репозиториев Fedora. Системная русская
+локаль не требуется и не добавляется в зависимости пакета.
 При первом запуске новой конфигурации ALOL выбирает UMU/Proton, если `umu-run`
 доступен; иначе выбирает установленный Wine. Существующий выбор окружения
 сохраняется. Wine и Proton используют отдельные префиксы.

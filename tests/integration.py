@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import tempfile
 import time
@@ -22,12 +23,13 @@ with open(os.environ['ALOL_TEST_TRACE'], 'a') as f:
         'verb': os.environ.get('PROTON_VERB'), 'wined3d': os.environ.get('PROTON_USE_WINED3D'),
         'winearch': os.environ.get('WINEARCH'), 'prime': os.environ.get('DRI_PRIME'),
         'install_path': os.environ.get('STEAM_COMPAT_INSTALL_PATH'), 'cwd': os.getcwd(),
-        'lc_all': os.environ.get('LC_ALL'), 'lang': os.environ.get('LANG'),
+        'lc_all': os.environ.get('LC_ALL'), 'lang': os.environ.get('LANG'), 'locpath': os.environ.get('LOCPATH'),
+        'xim': os.environ.get('XMODIFIERS'), 'gtk_im': os.environ.get('GTK_IM_MODULE'), 'qt_im': os.environ.get('QT_IM_MODULE'),
         'qt': os.environ.get('QT_QPA_PLATFORM'), 'gdk': os.environ.get('GDK_BACKEND'),
         'wayland': os.environ.get('WAYLAND_DISPLAY'), 'display': os.environ.get('DISPLAY'),
         'session': os.environ.get('XDG_SESSION_TYPE'), 'mangohud': os.environ.get('MANGOHUD'),
         'proton_wayland': os.environ.get('PROTON_ENABLE_WAYLAND')}) + '\n')
-if os.environ.get('ALOL_TEST_FAIL') == exe:
+if os.environ.get('ALOL_TEST_FAIL') == exe or (os.environ.get('ALOL_TEST_FAIL_LANGUAGE') and args == [r'C:\windows\system32\reg.exe','import',r'C:\alol\locale-ru.reg']):
     (p / 'drive_c').mkdir(parents=True, exist_ok=True)
     print('injected runner error', flush=True)
     sys.exit(42)
@@ -81,8 +83,11 @@ class Workflow(unittest.TestCase):
             runner.write_text("#!/usr/bin/python3\n" + FAKE)
             runner.chmod(0o755)
         locale = self.bin / 'locale'
-        locale.write_text("#!/usr/bin/python3\nimport os\nprint('C' if os.environ.get('ALOL_TEST_NO_RU_LOCALE') else 'C\\nru_RU.utf8')\n")
+        locale.write_text("#!/usr/bin/python3\nimport os,sys,pathlib\np=os.environ.get('LOCPATH','')\nok=not os.environ.get('ALOL_TEST_NO_RU_LOCALE') or (p and (pathlib.Path(p)/'ru_RU.UTF-8/LC_CTYPE').is_file())\nif sys.argv[1:]==['-a']:print('C\\nru_RU.utf8' if ok else 'C')\nelif ok:print('UTF-8')\nelse:print('unavailable',file=sys.stderr);sys.exit(1)\n")
         locale.chmod(0o755)
+        localedef = self.bin / 'localedef'
+        localedef.write_text("#!/usr/bin/python3\nimport os,pathlib,sys\nif os.environ.get('ALOL_TEST_LOCALEDEF_FAIL'):sys.exit(1)\np=pathlib.Path(sys.argv[-1]);(p/'LC_MESSAGES').mkdir(parents=True)\n(p/'LC_CTYPE').write_bytes(b'fixture');(p/'LC_MESSAGES/SYS_LC_MESSAGES').write_bytes(b'fixture')\n")
+        localedef.chmod(0o755)
         self.env["PATH"] = str(self.bin) + os.pathsep + os.environ["PATH"]
         self.installer = self.root / "Arizona's Game = $(touch PWNED).exe"
         self.installer.touch()
@@ -136,10 +141,11 @@ class Workflow(unittest.TestCase):
         self.assertEqual(calls[1]["args"], [REG, "add", "HKCU\\Software\\Wine", "/v", "Version", "/t", "REG_SZ", "/d", "win10", "/f"])
         self.assertEqual(calls[2]["args"], ["winetricks", "-q", "corefonts", "vcrun2022"])
         self.assertEqual(calls[3]["args"], [REG, 'import', r'C:\alol\locale-ru.reg'])
-        self.assertEqual(calls[4]["args"], [str(self.installer), "/S", "/D=C:\\Arizona Games Launcher"])
+        self.assertEqual(calls[4]["args"], [REG, "import", r"C:\alol\input.reg"])
+        self.assertEqual(calls[5]["args"], [str(self.installer), "/S", "/D=C:\\Arizona Games Launcher"])
         pinned = str(self.data / "Steam/compatibilitytools.d/GE-Proton-test")
         self.assertIn("proton=" + pinned, self.config.read_text())
-        self.assertEqual(calls[4]["proton"], pinned)
+        self.assertEqual(calls[5]["proton"], pinned)
         self.run_alol("launch")
         last = self.calls()[-1]
         self.assertEqual(last["args"][1:], ["--no-sandbox", "--disable-gpu"])
@@ -270,15 +276,60 @@ class Workflow(unittest.TestCase):
         self.assertIn('"LocaleName"="ru-RU"',reg)
         self.assertTrue((self.prefix/'.alol-language-ru-v1').is_file())
         self.run_alol('prepare')
-        imports=[c for c in self.calls() if c['args'][0]==REG and c['args'][1]=='import']
+        imports=[c for c in self.calls() if c['args']==[REG,'import',r'C:\alol\locale-ru.reg']]
         self.assertEqual(len(imports),1)
         self.run_alol('repair-language')
-        self.assertEqual(len([c for c in self.calls() if c['args'][0]==REG and c['args'][1]=='import']),2)
+        self.assertEqual(len([c for c in self.calls() if c['args']==[REG,'import',r'C:\alol\locale-ru.reg']]),2)
 
-    def test_missing_linux_locale_stops_setup_with_actionable_error(self):
-        result=self.run_alol('install',success=False,ALOL_TEST_NO_RU_LOCALE='1')
-        self.assertIn('locale-gen',result.stderr)
+    def test_missing_linux_locale_is_generated_privately_and_reused(self):
+        self.run_alol('install', ALOL_TEST_NO_RU_LOCALE='1')
+        call = self.calls()[-1]
+        cache = Path(call['locpath'])
+        self.assertTrue(cache.is_relative_to(self.data/'alol/locales'))
+        category = cache/'ru_RU.UTF-8/LC_CTYPE'
+        self.assertTrue(category.is_file())
+        before = category.stat().st_mtime_ns
+        self.run_alol('launch', ALOL_TEST_NO_RU_LOCALE='1', ALOL_TEST_LOCALEDEF_FAIL='1')
+        self.assertEqual(category.stat().st_mtime_ns, before)
+        self.assertTrue((self.prefix/'.alol-language-ru-v1').is_file())
+
+    def test_real_private_locale_supports_utf8_without_changing_system_list(self):
+        real_locale = shutil.which('locale', path=os.defpath)
+        real_localedef = shutil.which('localedef', path=os.defpath)
+        if not real_locale or not real_localedef or not Path('/usr/share/i18n/locales/ru_RU').is_file():
+            self.skipTest('localedef and locale sources needed for the real generation check')
+        before = subprocess.check_output([real_locale, '-a'])
+        # Force the private path even on hosts that already provide ru_RU.
+        (self.bin/'locale').write_text('#!/usr/bin/python3\nimport os,sys\nif not os.environ.get("LOCPATH"):sys.exit(1)\nos.execv('+repr(real_locale)+',["locale",*sys.argv[1:]])\n')
+        (self.bin/'localedef').write_text('#!/usr/bin/python3\nimport os,sys\nos.execv('+repr(real_localedef)+',["localedef",*sys.argv[1:]])\n')
+        self.run_alol('install')
+        cache = self.calls()[-1]['locpath']
+        self.assertIsNotNone(cache)
+        result = subprocess.run([real_locale, 'charmap'], env=dict(os.environ, LC_ALL='ru_RU.UTF-8', LOCPATH=cache), capture_output=True, text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.stdout.strip(),'UTF-8')
+        self.assertEqual(result.stderr,'')
+        self.assertEqual(subprocess.check_output([real_locale,'-a']),before)
+
+    def test_unavailable_localedef_uses_wine_nls_without_aborting_install(self):
+        for runner in ['proton', 'wine']:
+            with self.subTest(runner=runner):
+                self.write_config(runner=runner)
+                result = self.run_alol('install', ALOL_TEST_NO_RU_LOCALE='1', ALOL_TEST_LOCALEDEF_FAIL='1')
+                self.assertIn('встроенная ru-RU Wine', result.stderr)
+                self.assertTrue(self.settings['runner'] in self.calls()[-1]['prefix'])
+                self.assertEqual(self.calls()[-1]['lc_all'], 'ru_RU.UTF-8')
+                self.assertFalse(list((self.data/'alol/locales').glob('*/.ru-*')))
+
+    def test_language_retry_after_failed_registry_import_keeps_components(self):
+        self.run_alol('install', success=False, ALOL_TEST_FAIL_LANGUAGE='1')
+        self.assertTrue((self.prefix/'winetricks.log').exists())
         self.assertFalse((self.prefix/'.alol-language-ru-v1').exists())
+        self.run_alol('install')
+        self.assertTrue((self.prefix/'.alol-language-ru-v1').is_file())
+        before = len([c for c in self.calls() if c['args'][0]=='winetricks'])
+        self.run_alol('repair-language')
+        self.assertEqual(len([c for c in self.calls() if c['args'][0]=='winetricks']), before)
 
     def test_launcher_compatibility_uses_xwayland_without_dotfile_overrides(self):
         overrides = dict(DISPLAY=":123", WAYLAND_DISPLAY="wayland-test", XDG_SESSION_TYPE="wayland",

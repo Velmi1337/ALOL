@@ -31,7 +31,6 @@ Requires:       coreutils
 Requires:       polkit
 Requires:       wine
 Requires:       winetricks
-Requires:       glibc-langpack-ru
 
 %description
 Lightweight native Rust/GTK launcher for Arizona RP. Includes server and

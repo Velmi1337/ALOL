@@ -55,6 +55,7 @@ pub struct Settings {
     pub debug: bool,
     pub no_sync: bool,
     pub launcher_compatibility: bool,
+    pub input_compatibility: bool,
     pub update_policy: String,
     pub update_notifications: bool,
 }
@@ -79,6 +80,7 @@ impl Default for Settings {
             debug: false,
             no_sync: false,
             launcher_compatibility: true,
+            input_compatibility: true,
             update_policy: "startup".into(),
             update_notifications: true,
         }
@@ -116,6 +118,7 @@ impl Settings {
                 "debug" => self.debug = v == "true",
                 "no_sync" => self.no_sync = v == "true",
                 "launcher_compatibility" => self.launcher_compatibility = v == "true",
+                "input_compatibility" => self.input_compatibility = v == "true",
                 "update_policy" => self.update_policy = v.into(),
                 "update_notifications" => self.update_notifications = v == "true",
                 _ => (),
@@ -180,7 +183,7 @@ impl Settings {
         let path = config_file();
         fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
         let text = format!(
-            "# ALOL — пути записываются без кавычек\nrunner={}\nproton={}\nwine={}\ninstaller={}\nexecutable={}\nprefix_root={}\nwined3d={}\ndisable_gpu={}\ndiscrete_gpu={}\ndebug={}\nno_sync={}\nlauncher_compatibility={}\nupdate_policy={}\nupdate_notifications={}\n",
+            "# ALOL — пути записываются без кавычек\nrunner={}\nproton={}\nwine={}\ninstaller={}\nexecutable={}\nprefix_root={}\nwined3d={}\ndisable_gpu={}\ndiscrete_gpu={}\ndebug={}\nno_sync={}\nlauncher_compatibility={}\ninput_compatibility={}\nupdate_policy={}\nupdate_notifications={}\n",
             self.runner,
             self.proton,
             self.wine,
@@ -193,6 +196,7 @@ impl Settings {
             self.debug,
             self.no_sync,
             self.launcher_compatibility,
+            self.input_compatibility,
             self.update_policy,
             self.update_notifications
         );
@@ -266,10 +270,8 @@ impl Settings {
             }
             Command::new(&self.wine)
         };
+        crate::language::configure(&mut c);
         c.env("WINEPREFIX", self.prefix())
-            .env("LANG", "ru_RU.UTF-8")
-            .env("LC_ALL", "ru_RU.UTF-8")
-            .env("LANGUAGE", "ru_RU:ru")
             .env_remove("WINEARCH")
             .env_remove("WINELOADER")
             .env_remove("WINESERVER")
@@ -301,6 +303,9 @@ impl Settings {
         }
         if self.launcher_compatibility && self.is_launcher(executable) {
             launcher_environment(&mut c)?;
+        }
+        if self.input_compatibility && (is_game(executable) || self.is_launcher(executable)) {
+            input_environment(&mut c);
         }
         c.arg(executable).args(args);
         if matches!(executable, WINEBOOT | REG | WINECFG) {
@@ -373,6 +378,71 @@ fn launcher_environment(command: &mut Command) -> Result<()> {
     {
         return Err("Для совместимого запуска Arizona нужен XWayland (DISPLAY). В niri проверьте установку xwayland-satellite; в Hyprland — поддержку XWayland. Либо отключите совместимый запуск в настройках ALOL для использования нативного Wine Wayland.".into());
     }
+    Ok(())
+}
+
+fn is_game(executable: &str) -> bool {
+    Path::new(executable).file_name().is_some_and(|name| {
+        ["enb.exe", "gta-sa.exe", "gtasa.exe", "gta_sa.exe"]
+            .iter()
+            .any(|expected| name.eq_ignore_ascii_case(expected))
+    })
+}
+
+fn input_environment(command: &mut Command) {
+    // Keep overlays/graphics settings. Bypass only inherited input-method hooks,
+    // which can consume letter events while arrows continue to reach the game.
+    command
+        .env("XMODIFIERS", "@im=none")
+        .env("GTK_IM_MODULE", "xim")
+        .env("QT_IM_MODULE", "xim")
+        .env("SDL_IM_MODULE", "none");
+    if env::var_os("DISPLAY").is_some_and(|display| !display.is_empty()) {
+        command
+            .env_remove("WAYLAND_DISPLAY")
+            .env("PROTON_ENABLE_WAYLAND", "0")
+            .env("SDL_VIDEODRIVER", "x11");
+    }
+    // No DISPLAY means native Wayland stays available. Never fabricate a socket
+    // name, change the compositor's keymap or run global setxkbmap commands.
+}
+
+fn ensure_input(s: &Settings) -> Result<()> {
+    let marker = s.prefix().join(".alol-input-v1");
+    let desired = if s.input_compatibility {
+        "enabled"
+    } else {
+        "disabled"
+    };
+    let previous = fs::read_to_string(&marker).ok();
+    if previous.as_deref() == Some(desired) || (!s.input_compatibility && previous.is_none()) {
+        return Ok(());
+    }
+    let registry = s.prefix().join("user.reg");
+    if registry.is_file() {
+        let backup =
+            data_dir()
+                .join("backups/input")
+                .join(format!("{}-{}", stamp(), std::process::id()));
+        fs::create_dir_all(&backup).map_err(|e| e.to_string())?;
+        fs::copy(registry, backup.join("user.reg")).map_err(|e| e.to_string())?;
+    }
+    // Wine reads per-EXE X11 settings before the shared X11 Driver key. Scope
+    // this to game executables, leaving launcher/installer text entry intact.
+    let value = if s.input_compatibility { "\"N\"" } else { "-" };
+    let mut text = "Windows Registry Editor Version 5.00\r\n".to_string();
+    for executable in ["enb.exe", "gta-sa.exe", "gtasa.exe", "gta_sa.exe"] {
+        text.push_str(&format!(
+            "\r\n[HKEY_CURRENT_USER\\Software\\Wine\\AppDefaults\\{executable}\\X11 Driver]\r\n\"UseXIM\"={value}\r\n"
+        ));
+    }
+    let directory = s.prefix().join("drive_c/alol");
+    fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    let mut bytes = vec![0xff, 0xfe];
+    bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+    fs::write(directory.join("input.reg"), bytes).map_err(|e| e.to_string())?;
+    run(s, REG, &["import", r"C:\alol\input.reg"])?;
+    fs::write(marker, desired).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -528,8 +598,11 @@ fn run_managed(
         crate::game::log_args(args),
         s.prefix().display()
     );
-    let mut child = s
-        .command(executable, args)?
+    let mut command = s.command(executable, args)?;
+    if TERMINATED.load(Ordering::Relaxed) {
+        return Err("Операция остановлена".into());
+    }
+    let mut child = command
         .spawn()
         .map_err(|e| format!("Не удалось запустить процесс: {e}"))?;
     let status = if let Some(game) = watch_game {
@@ -636,6 +709,7 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
             let actual = resolved_settings(&s);
             ensure_components(&actual)?;
             ensure_language(&actual, false)?;
+            ensure_input(&actual)?;
             backup_zone_identifiers_at(&plan.game_directory)?;
             crate::game::sync_player(&s, &profile)?;
             let options = crate::game_options::GameOptions::load(&s)?;
@@ -685,6 +759,7 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
             )?;
             ensure_components(&resolved_settings(&s))?;
             ensure_language(&resolved_settings(&s), false)?;
+            ensure_input(&resolved_settings(&s))?;
             backup_zone_identifiers(&s)?;
             let profile = crate::game::PlayerProfile::load(&s)?;
             crate::game::sync_player(&s, &profile)?;
@@ -723,6 +798,7 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
             run(&s, WINEBOOT, &["-u"])?;
             ensure_components(&resolved_settings(&s))?;
             ensure_language(&resolved_settings(&s), false)?;
+            ensure_input(&resolved_settings(&s))?;
             backup_zone_identifiers(&s)?;
             let n = backup_caches(&s)?;
             println!(
@@ -783,7 +859,8 @@ fn prepare(s: &Settings) -> Result<()> {
         ],
     )?;
     ensure_components(&actual)?;
-    ensure_language(&actual, false)
+    ensure_language(&actual, false)?;
+    ensure_input(&actual)
 }
 
 const RUSSIAN_REG: &str = r#"Windows Registry Editor Version 5.00
@@ -826,16 +903,6 @@ fn ensure_language(s: &Settings, force: bool) -> Result<()> {
     let marker = s.prefix().join(".alol-language-ru-v1");
     if !force && marker.is_file() {
         return Ok(());
-    }
-    let locales = Command::new("locale")
-        .arg("-a")
-        .output()
-        .map_err(|e| format!("Не проверить локали: {e}"))?;
-    if !String::from_utf8_lossy(&locales.stdout)
-        .lines()
-        .any(|s| s.to_ascii_lowercase().replace('-', "") == "ru_ru.utf8")
-    {
-        return Err("В Linux отсутствует ru_RU.UTF-8. Включите ru_RU.UTF-8 в /etc/locale.gen и выполните sudo locale-gen.".into());
     }
     let backup =
         data_dir()
@@ -892,10 +959,9 @@ fn ensure_components(s: &Settings) -> Result<()> {
         if !available("winetricks") {
             return Err("Для установки компонентов нужен winetricks".into());
         }
-        let status = Command::new("winetricks")
-            .env("LANG", "ru_RU.UTF-8")
-            .env("LC_ALL", "ru_RU.UTF-8")
-            .env("LANGUAGE", "ru_RU:ru")
+        let mut command = Command::new("winetricks");
+        crate::language::configure(&mut command);
+        let status = command
             .env("WINEPREFIX", s.prefix())
             .env("WINE", &s.wine)
             .env_remove("WINEARCH")
@@ -1110,6 +1176,11 @@ pub fn doctor(s: &Settings) -> String {
         },
         s.update_policy
     ));
+    out.push_str(&format!(
+        "\nЛокаль: {}\nСовместимость клавиатуры: {}\n",
+        crate::language::description(),
+        s.input_compatibility
+    ));
     out
 }
 
@@ -1157,14 +1228,16 @@ mod tests {
             "startup"
         );
         assert!(settings.update_notifications);
+        assert!(settings.input_compatibility);
         let saved = settings
             .parse(
-                "update_policy=manual\nupdate_notifications=false\nlauncher_compatibility=false\n",
+                "update_policy=manual\nupdate_notifications=false\nlauncher_compatibility=false\ninput_compatibility=false\n",
             )
             .unwrap();
         assert_eq!(saved.update_policy, "manual");
         assert!(!saved.update_notifications);
         assert!(!saved.launcher_compatibility);
+        assert!(!saved.input_compatibility);
         assert!(settings.parse("update_policy=never-ever\n").is_err());
     }
     fn temp() -> PathBuf {

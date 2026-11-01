@@ -23,7 +23,7 @@
 ### Arch Linux / CachyOS
 
 ```sh
-sudo pacman -U ./alol-0.5.5-1-x86_64.pkg.tar.zst
+sudo pacman -U ./alol-0.5.6-1-x86_64.pkg.tar.zst
 ```
 
 Нужны включённый `multilib` и подходящие 32/64-битные графические драйверы.
@@ -31,10 +31,10 @@ sudo pacman -U ./alol-0.5.5-1-x86_64.pkg.tar.zst
 ### Fedora 44+
 
 ```sh
-sudo dnf install ./alol-0.5.5-1.fc44.x86_64.rpm
+sudo dnf install ./alol-0.5.6-1.fc44.x86_64.rpm
 ```
 
-RPM установит Wine, winetricks и русскую локаль. GE-Proton доступен при установленном UMU.
+RPM установит Wine и winetricks. Системная русская локаль не требуется. GE-Proton доступен при установленном UMU.
 
 Откройте **ALOL** в меню приложений или выполните `alol`.
 [Другие способы установки и сборка из исходников →](docs/installation.md)
@@ -76,6 +76,11 @@ ALOL его не хранит.
 <img src="docs/screenshots/mods.png" width="760" alt="Каталог модов и управление установленными модами">
 
 </details>
+
+## Contributors
+
+- [Velmi1337](https://github.com/Velmi1337) — автор проекта, идеи и проверка на реальных системах.
+- **Codex (OpenAI)** — ИИ-помощник в разработке, исправлениях и автоматических проверках.
 
 ## Подробнее
 

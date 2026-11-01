@@ -142,7 +142,46 @@ class DirectGame(unittest.TestCase):
         self.run_alol('play',success=False)
         self.assertEqual(len(self.calls()),count);self.assertEqual(self.native.read_bytes(),before)
 
+    def test_input_compatibility_bypasses_ime_and_uses_real_xwayland_socket(self):
+        original = self.native.read_bytes()
+        self.run_alol('play', DISPLAY=':123', WAYLAND_DISPLAY='wayland-test',
+                      PROTON_ENABLE_WAYLAND='1', XMODIFIERS='@im=ibus', GTK_IM_MODULE='ibus',
+                      QT_IM_MODULE='fcitx', MANGOHUD='1')
+        call = self.game_calls()[-1]
+        self.assertEqual(call['display'], ':123')
+        self.assertIsNone(call['wayland'])
+        self.assertEqual(call['proton_wayland'], '0')
+        self.assertEqual(call['xim'], '@im=none')
+        self.assertEqual(call['mangohud'], '1')
+        reg = (self.prefix/'drive_c/alol/input.reg').read_text(encoding='utf-16')
+        self.assertIn('AppDefaults\\gta_sa.exe\\X11 Driver', reg)
+        self.assertIn('"UseXIM"="N"', reg)
+        self.assertEqual(json.loads(self.native.read_bytes())['arizona']['password'], json.loads(original)['arizona']['password'])
+
+    def test_input_compatibility_can_be_disabled_and_reenabled(self):
+        self.write_config(input_compatibility='false')
+        self.run_alol('play', DISPLAY=':123', WAYLAND_DISPLAY='wayland-test',
+                      PROTON_ENABLE_WAYLAND='1', XMODIFIERS='@im=ibus')
+        call = self.game_calls()[-1]
+        self.assertEqual(call['wayland'], 'wayland-test')
+        self.assertEqual(call['proton_wayland'], '1')
+        self.assertEqual(call['xim'], '@im=ibus')
+        self.assertIn('"UseXIM"=-', (self.prefix/'drive_c/alol/input.reg').read_text(encoding='utf-16'))
+        count = len(self.calls())
+        self.run_alol('play')
+        self.assertEqual(len(self.calls()), count+1)
+        self.write_config(input_compatibility='true')
+        self.run_alol('play')
+        self.assertIn('"UseXIM"="N"', (self.prefix/'drive_c/alol/input.reg').read_text(encoding='utf-16'))
+
+    def test_missing_display_keeps_native_wayland_input_available(self):
+        self.run_alol('play', DISPLAY='', WAYLAND_DISPLAY='wayland-test', PROTON_ENABLE_WAYLAND='1')
+        call = self.game_calls()[-1]
+        self.assertEqual(call['wayland'], 'wayland-test')
+        self.assertEqual(call['proton_wayland'], '1')
+
     def test_game_preserves_user_graphics_environment(self):
+        self.write_config(input_compatibility='false')
         self.run_alol('play', DISPLAY=':123', WAYLAND_DISPLAY='wayland-test', GDK_BACKEND='wayland',
                       QT_QPA_PLATFORM='wayland', MANGOHUD='1', PROTON_ENABLE_WAYLAND='1')
         call = self.game_calls()[-1]

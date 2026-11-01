@@ -306,6 +306,7 @@ struct Fields {
     debug: W,
     no_sync: W,
     launcher_compatibility: W,
+    input_compatibility: W,
     update_policy: W,
     update_notifications: W,
 }
@@ -459,6 +460,7 @@ impl App {
             debug: checked(f.debug),
             no_sync: checked(f.no_sync),
             launcher_compatibility: checked(f.launcher_compatibility),
+            input_compatibility: checked(f.input_compatibility),
             update_policy: ["startup", "daily", "weekly", "manual"]
                 .get(unsafe { gtk_combo_box_get_active(f.update_policy) } as usize)
                 .ok_or("Выберите режим проверки обновлений")?
@@ -1831,6 +1833,7 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             debug: ptr::null_mut(),
             no_sync: ptr::null_mut(),
             launcher_compatibility: ptr::null_mut(),
+            input_compatibility: ptr::null_mut(),
             update_policy: ptr::null_mut(),
             update_notifications: ptr::null_mut(),
         };
@@ -2148,6 +2151,12 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             "Второй GPU · DRI_PRIME=1 (Mesa)",
             settings.discrete_gpu,
         );
+        let input_compatibility = check(
+            settings_page,
+            "Совместимость клавиатуры: WASD / COSMIC / XWayland",
+            settings.input_compatibility,
+        );
+        gtk_widget_set_tooltip_text(input_compatibility, c"Запуск через XWayland, если доступен, без Linux IME. Настройки рабочего стола и привязки игры сохраняются. Перед игрой выберите английскую раскладку. Отключите для нативного Wayland или IME.".as_ptr());
         let no_sync = check(
             settings_page,
             "Совместимость: отключить Esync / Fsync",
@@ -2171,6 +2180,7 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             debug,
             no_sync,
             launcher_compatibility,
+            input_compatibility,
             update_policy,
             update_notifications,
         };
