@@ -5,7 +5,7 @@ pkgrel=1
 pkgdesc='Lightweight native Arizona RP launcher for Linux'
 arch=('x86_64')
 url='@REPOSITORY@'
-license=('MIT')
+license=('Apache-2.0')
 depends=('gtk3' 'glib2' 'cairo' 'libarchive' 'curl' 'umu-launcher' 'polkit' 'glibc' 'gcc-libs')
 makedepends=('rust' 'python')
 checkdepends=('desktop-file-utils')
@@ -48,5 +48,6 @@ package() {
     install -Dm644 assets/alol.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/alol.svg"
     install -Dm644 assets/alol.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/alol.png"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/alol/LICENSE"
+    install -Dm644 NOTICE "$pkgdir/usr/share/licenses/alol/NOTICE"
     install -Dm644 README.md "$pkgdir/usr/share/doc/alol/README.md"
 }

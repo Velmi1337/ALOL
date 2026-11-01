@@ -3,7 +3,7 @@ name = "alol"
 version = "0.5.7"
 edition = "2024"
 description = "Arizona Launcher On Linux — lightweight native Rust launcher"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/Velmi1337/ALOL"
 
 [profile.release]

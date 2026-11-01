@@ -5,7 +5,7 @@ Name:           alol
 Version:        @VERSION@
 Release:        1%{?dist}
 Summary:        Native Arizona RP launcher for Linux
-License:        MIT
+License:        Apache-2.0
 URL:            @REPOSITORY@
 Source0:        alol-%{version}.tar.gz
 Packager:       ALOL contributors
@@ -66,7 +66,7 @@ install -Dm644 assets/alol.png %{buildroot}%{_datadir}/icons/hicolor/256x256/app
 
 %files
 %defattr(-,root,root,-)
-%license LICENSE
+%license LICENSE NOTICE
 %doc README.md
 %{_bindir}/alol
 %{_datadir}/applications/alol.desktop

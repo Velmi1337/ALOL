@@ -14,7 +14,7 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 TOP_LEVEL = (
-    "Cargo.toml", "Cargo.lock", "LICENSE", "README.md", "CHANGELOG.md",
+    "Cargo.toml", "Cargo.lock", "LICENSE", "NOTICE", "README.md", "CHANGELOG.md",
     ".gitignore", ".gitattributes", "install.sh", "install-arch.sh", "install-fedora.sh", "run-dev.sh",
 )
 DIRECTORIES = ("src", "assets", "docs", "tests", "packaging", "scripts", ".github")

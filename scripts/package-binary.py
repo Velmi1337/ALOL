@@ -25,7 +25,11 @@ def main():
     output = args.output / f"alol-{version}-linux-x86_64"
     shutil.copyfile(binary, output)
     output.chmod(0o755)
-    print(f"Standalone executable: {output.name}")
+    for name in ("LICENSE", "NOTICE"):
+        destination = args.output / name
+        if destination.resolve() != (ROOT / name).resolve():
+            shutil.copyfile(ROOT / name, destination)
+    print(f"Standalone executable: {output.name}; LICENSE and NOTICE included")
 
 
 if __name__ == "__main__":

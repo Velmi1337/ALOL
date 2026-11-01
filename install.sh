@@ -6,6 +6,8 @@ case "$alol_prefix" in /*) ;; *) echo 'ALOL_INSTALL_PREFIX must be absolute' >&2
 cd "$alol_source"
 cargo build --offline --release
 install -Dm755 target/release/alol "$alol_prefix/bin/alol"
+install -Dm644 LICENSE "$alol_prefix/share/licenses/alol/LICENSE"
+install -Dm644 NOTICE "$alol_prefix/share/licenses/alol/NOTICE"
 install -Dm644 assets/alol.svg "$alol_prefix/share/icons/hicolor/scalable/apps/alol.svg"
 install -Dm644 assets/alol.png "$alol_prefix/share/icons/hicolor/256x256/apps/alol.png"
 python3 - "$alol_prefix" <<'PY'

@@ -30,10 +30,10 @@ def audit_fedora(directory, version):
     if len(packages) != 1:
         raise ValueError("Expected one native Fedora x86_64 RPM")
     package = packages[0]
-    query = "%{NAME}\n%{VERSION}\n%{ARCH}\n%{PACKAGER}\n%{BUILDHOST}\n%{RELEASE}\n"
+    query = "%{NAME}\n%{VERSION}\n%{ARCH}\n%{PACKAGER}\n%{BUILDHOST}\n%{RELEASE}\n%{LICENSE}\n"
     fields = subprocess.check_output(["rpm", "-qp", "--qf", query, str(package)], text=True).splitlines()
     if (fields[:5] != ["alol", version, "x86_64", "ALOL contributors", "alol-builder"]
-            or not re.fullmatch(r"1\.fc[0-9]+", fields[5])):
+            or not re.fullmatch(r"1\.fc[0-9]+", fields[5]) or fields[6] != "Apache-2.0"):
         raise ValueError("Unexpected RPM identity or private build metadata")
     info = subprocess.check_output([
         "rpm", "-qp", "--qf", "[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILEUSERNAME}\t%{FILEGROUPNAME}\n]", str(package)
@@ -52,7 +52,8 @@ def audit_fedora(directory, version):
         "usr/bin/alol", "usr/share/applications/alol.desktop",
         "usr/share/icons/hicolor/scalable/apps/alol.svg",
         "usr/share/icons/hicolor/256x256/apps/alol.png",
-        "usr/share/licenses/alol/LICENSE", "usr/share/doc/alol/README.md",
+        "usr/share/licenses/alol/LICENSE", "usr/share/licenses/alol/NOTICE",
+        "usr/share/doc/alol/README.md",
     }
     if regular != expected:
         raise ValueError("Unexpected payload in RPM")
@@ -61,6 +62,8 @@ def audit_fedora(directory, version):
     for name in expected:
         data = subprocess.check_output(["bsdtar", "-xOf", str(package), paths[name]])
         audit_bytes(name, data)
+        if name.startswith("usr/share/licenses/alol/") and data != (ROOT / Path(name).name).read_bytes():
+            raise ValueError("RPM license/notice differs from source")
     return package
 
 
@@ -122,7 +125,8 @@ def main():
             ".PKGINFO", ".MTREE", "usr/bin/alol",
             "usr/share/applications/alol.desktop", "usr/share/icons/hicolor/scalable/apps/alol.svg",
             "usr/share/icons/hicolor/256x256/apps/alol.png",
-            "usr/share/licenses/alol/LICENSE", "usr/share/doc/alol/README.md",
+            "usr/share/licenses/alol/LICENSE", "usr/share/licenses/alol/NOTICE",
+            "usr/share/doc/alol/README.md",
         }
         actual = {name.removeprefix("./") for name in names if not name.endswith("/")}
         if actual != allowed:
@@ -132,12 +136,17 @@ def main():
             audit_bytes(name, data)
             if name == ".PKGINFO" and b"packager = ALOL contributors\n" not in data:
                 raise ValueError("Package author is not anonymous")
+            if name == ".PKGINFO" and b"license = Apache-2.0\n" not in data:
+                raise ValueError("Package license is not Apache-2.0")
+            if name.startswith("usr/share/licenses/alol/") and data != (ROOT / Path(name).name).read_bytes():
+                raise ValueError("Package license/notice differs from source")
         pkgbuild = args.directory / "PKGBUILD"
         data = pkgbuild.read_bytes()
         audit_bytes("PKGBUILD", data)
         if source_hash not in data or b"@VERSION@" in data or b"@SHA256@" in data:
             raise ValueError("PKGBUILD source checksum was not generated correctly")
         artifacts.extend([package, pkgbuild])
+    artifacts.extend(ROOT / name for name in ("LICENSE", "NOTICE"))
     artifacts.extend(ROOT / name for name in sorted(source.SCREENSHOTS))
     manifest = "SHA256SUMS.fedora" if args.platform == "fedora" else "SHA256SUMS"
     (args.directory / manifest).write_text("".join(

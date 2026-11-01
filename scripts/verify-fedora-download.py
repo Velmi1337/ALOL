@@ -22,7 +22,7 @@ def main():
     if package.read_bytes()[:4] != b"\xed\xab\xee\xdb":
         raise ValueError("Invalid RPM signature")
     pngs = {name: ROOT / "docs/screenshots" / name for name in ("main.png", "settings.png", "mods.png")}
-    expected = {package.name, "alol.spec", f"alol-{version}.tar.gz", *pngs}
+    expected = {package.name, "alol.spec", f"alol-{version}.tar.gz", "LICENSE", "NOTICE", *pngs}
     checksums = {}
     for line in (args.directory / "SHA256SUMS.fedora").read_text().splitlines():
         digest, name = line.split("  ", 1)
@@ -31,7 +31,8 @@ def main():
         checksums[name] = digest
     if set(checksums) != expected:
         raise ValueError("Incomplete Fedora release checksums")
-    paths = {package.name: package, "alol.spec": args.directory / "alol.spec", **pngs}
+    paths = {package.name: package, "alol.spec": args.directory / "alol.spec",
+             "LICENSE": ROOT / "LICENSE", "NOTICE": ROOT / "NOTICE", **pngs}
     archive = args.archive or args.directory / f"alol-{version}.tar.gz"
     if not archive.is_file():
         raise ValueError("Released source archive is required for verification")
