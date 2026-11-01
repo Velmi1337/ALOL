@@ -1,6 +1,7 @@
 //! Small GTK 3 ABI surface. Widgets and signal data live on GTK's main thread.
 //! No webview, background polling loop, Cargo dependencies, or bundled toolkit.
 use crate::core::{self, Result, Settings};
+use crate::desktop;
 use crate::game::{self, PlayerProfile, Server};
 use crate::game_options::{self, GameOptions};
 use crate::mods::{self, CatalogMod, InstalledMod};
@@ -26,6 +27,12 @@ unsafe extern "C" {
     fn gtk_window_set_default_size(window: W, width: c_int, height: c_int);
     fn gtk_window_set_position(window: W, position: c_int);
     fn gtk_window_set_icon_name(window: W, name: *const c_char);
+    fn gtk_window_set_icon(window: W, pixbuf: W);
+    fn gtk_window_set_default_icon(pixbuf: W);
+    fn gtk_window_set_transient_for(window: W, parent: W);
+    fn gtk_window_set_modal(window: W, modal: c_int);
+    fn gtk_window_set_destroy_with_parent(window: W, destroy: c_int);
+    fn gtk_window_set_deletable(window: W, deletable: c_int);
     fn gtk_box_new(orientation: c_int, spacing: c_int) -> W;
     fn gtk_box_set_homogeneous(container: W, homogeneous: c_int);
     fn gtk_box_pack_start(container: W, child: W, expand: c_int, fill: c_int, padding: c_uint);
@@ -52,6 +59,7 @@ unsafe extern "C" {
     fn gtk_label_set_text(label: W, text: *const c_char);
     fn gtk_label_set_xalign(label: W, align: f32);
     fn gtk_label_set_line_wrap(label: W, wrap: c_int);
+    fn gtk_label_set_max_width_chars(label: W, width: c_int);
     fn gtk_button_new_with_label(label: *const c_char) -> W;
     fn gtk_button_set_label(button: W, label: *const c_char);
     fn gtk_entry_new() -> W;
@@ -110,10 +118,33 @@ unsafe extern "C" {
     fn gtk_file_chooser_get_filename(chooser: W) -> *mut c_char;
     fn gtk_dialog_run(dialog: W) -> c_int;
     fn gtk_dialog_add_button(dialog: W, text: *const c_char, response: c_int) -> W;
+    fn gtk_dialog_new() -> W;
+    fn gtk_dialog_get_content_area(dialog: W) -> W;
+    fn gtk_dialog_get_widget_for_response(dialog: W, response: c_int) -> W;
+    fn gtk_dialog_set_response_sensitive(dialog: W, response: c_int, sensitive: c_int);
 }
 #[link(name = "gdk-3")]
 unsafe extern "C" {
     fn gdk_screen_get_default() -> W;
+    fn gdk_display_get_default() -> W;
+    fn gdk_display_get_primary_monitor(display: W) -> W;
+    fn gdk_display_get_monitor(display: W, index: c_int) -> W;
+    fn gdk_monitor_get_workarea(monitor: W, rectangle: *mut Rectangle);
+}
+#[repr(C)]
+#[derive(Default)]
+struct Rectangle {
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+}
+#[link(name = "gdk_pixbuf-2.0")]
+unsafe extern "C" {
+    fn gdk_pixbuf_loader_new_with_type(format: *const c_char, error: *mut W) -> W;
+    fn gdk_pixbuf_loader_write(loader: W, bytes: *const u8, count: usize, error: *mut W) -> c_int;
+    fn gdk_pixbuf_loader_close(loader: W, error: *mut W) -> c_int;
+    fn gdk_pixbuf_loader_get_pixbuf(loader: W) -> W;
 }
 #[link(name = "cairo")]
 unsafe extern "C" {
@@ -149,6 +180,8 @@ unsafe extern "C" {
     fn g_source_remove(tag: c_uint) -> c_int;
     fn g_free(pointer: W);
     fn g_get_monotonic_time() -> i64;
+    fn g_set_prgname(name: *const c_char);
+    fn g_set_application_name(name: *const c_char);
 }
 unsafe extern "C" {
     fn kill(pid: c_int, signal: c_int) -> c_int;
@@ -254,6 +287,7 @@ enum Action {
     ModManage(&'static str),
     PlayerChanged,
     Update,
+    UpdatePreferences,
 }
 struct Signal {
     app: *mut App,
@@ -271,6 +305,9 @@ struct Fields {
     discrete_gpu: W,
     debug: W,
     no_sync: W,
+    launcher_compatibility: W,
+    update_policy: W,
+    update_notifications: W,
 }
 struct App {
     settings: Settings,
@@ -320,6 +357,10 @@ struct App {
     update_release: Option<Release>,
     update_installed: bool,
     executable: std::path::PathBuf,
+    update_dialog: W,
+    update_dialog_status: W,
+    update_prompt_pending: bool,
+    update_manual: bool,
 }
 struct Capture {
     output: std::path::PathBuf,
@@ -417,6 +458,12 @@ impl App {
             discrete_gpu: checked(f.discrete_gpu),
             debug: checked(f.debug),
             no_sync: checked(f.no_sync),
+            launcher_compatibility: checked(f.launcher_compatibility),
+            update_policy: ["startup", "daily", "weekly", "manual"]
+                .get(unsafe { gtk_combo_box_get_active(f.update_policy) } as usize)
+                .ok_or("Выберите режим проверки обновлений")?
+                .to_string(),
+            update_notifications: checked(f.update_notifications),
         };
         s.validate()?;
         Ok(s)
@@ -581,6 +628,19 @@ impl App {
             return Ok(());
         }
         match action {
+            Action::UpdatePreferences => {
+                let current = self.collect()?;
+                let mut saved = Settings::load()?;
+                saved.update_policy = current.update_policy;
+                saved.update_notifications = current.update_notifications;
+                saved.save()?;
+                self.settings.update_policy = saved.update_policy;
+                self.settings.update_notifications = saved.update_notifications;
+                if !self.settings.update_notifications {
+                    self.update_prompt_pending = false;
+                }
+                set_label(self.status, "Настройки обновлений сохранены");
+            }
             Action::Update => {
                 if self.child.is_some() {
                     return Ok(());
@@ -593,9 +653,8 @@ impl App {
                     unsafe {
                         gtk_main_quit();
                     }
-                } else if let Some(release) = &self.update_release {
-                    let version = release.version.clone();
-                    self.start_args("self-update", &[version])?;
+                } else if self.update_release.is_some() {
+                    self.show_update_dialog();
                 } else {
                     self.check_updates(true);
                 }
@@ -1119,6 +1178,7 @@ impl App {
                                 );
                             }
                         }
+                        self.finish_update_dialog(status.success());
                     }
                     if let Ok(s) = Settings::load() {
                         unsafe {
@@ -1181,6 +1241,10 @@ impl App {
             }
             self.log_text = log;
         }
+        if self.update_prompt_pending && self.child.is_none() && self.update_dialog.is_null() {
+            self.update_prompt_pending = false;
+            self.show_update_dialog();
+        }
     }
 
     fn check_updates(&mut self, force: bool) {
@@ -1188,15 +1252,21 @@ impl App {
             return;
         }
         self.update_release = None;
+        self.update_manual = force;
         set_label(self.update_label, "Проверка обновлений ALOL…");
         unsafe {
             gtk_widget_set_sensitive(self.update_button, 0);
         }
         let (sender, receiver) = mpsc::channel();
         self.update_receiver = Some(receiver);
+        let policy = self.settings.update_policy.clone();
         // One bounded check per launch or button click; GTK is only touched by the main thread.
         std::thread::spawn(move || {
-            let _ = sender.send(updates::check(force));
+            let _ = sender.send(if force {
+                updates::check(true)
+            } else {
+                updates::check_scheduled(&policy)
+            });
         });
     }
 
@@ -1211,6 +1281,9 @@ impl App {
         self.update_receiver = None;
         match result {
             Ok(Some(release)) => {
+                self.update_prompt_pending = self.update_manual
+                    || (self.settings.update_notifications
+                        && self.settings.update_policy != "manual");
                 set_label(
                     self.update_label,
                     &format!(
@@ -1249,6 +1322,245 @@ impl App {
         unsafe {
             gtk_widget_set_sensitive(self.update_button, self.child.is_none().into());
         }
+    }
+
+    fn connect_action(&mut self, widget: W, name: &str, action: Action) {
+        let mut signal = SignalHolder(Box::new(Signal { app: self, action }));
+        let pointer = (&mut *signal.0 as *mut Signal).cast();
+        unsafe {
+            g_signal_connect_data(
+                widget,
+                c(name).as_ptr(),
+                Some(std::mem::transmute::<
+                    unsafe extern "C" fn(W, W),
+                    unsafe extern "C" fn(),
+                >(clicked)),
+                pointer,
+                ptr::null_mut(),
+                0,
+            );
+        }
+        self.signals.push(signal);
+    }
+
+    fn show_update_dialog(&mut self) {
+        if !self.update_dialog.is_null() || self.child.is_some() {
+            return;
+        }
+        let Some(release) = &self.update_release else {
+            return;
+        };
+        unsafe {
+            let dialog = gtk_dialog_new();
+            self.update_dialog = dialog;
+            gtk_window_set_title(dialog, c"Обновление ALOL".as_ptr());
+            gtk_window_set_transient_for(dialog, self.window);
+            gtk_window_set_destroy_with_parent(dialog, 1);
+            gtk_window_set_modal(dialog, 1);
+            gtk_window_set_position(dialog, 4);
+            let (width, height) = fit_window_size(620, 500);
+            gtk_window_set_default_size(dialog, width, height);
+            let content = gtk_dialog_get_content_area(dialog);
+            gtk_container_set_border_width(content, 20);
+            pack(
+                content,
+                label(&format!("Доступна ALOL {}", release.version), "alol-title"),
+                false,
+            );
+            pack(
+                content,
+                label(
+                    &format!("Установлена версия {}", env!("CARGO_PKG_VERSION")),
+                    "caption",
+                ),
+                false,
+            );
+            pack(content, label("Что нового", "field-label"), false);
+            let notes = gtk_text_view_new();
+            style(notes, "release-notes");
+            gtk_text_view_set_editable(notes, 0);
+            gtk_text_view_set_cursor_visible(notes, 0);
+            gtk_text_view_set_wrap_mode(notes, 3);
+            let text = if release.notes.trim().is_empty() {
+                "Описание доступно на странице релиза."
+            } else {
+                &release.notes
+            };
+            gtk_text_buffer_set_text(gtk_text_view_get_buffer(notes), c(text).as_ptr(), -1);
+            let scroller = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            gtk_scrolled_window_set_policy(scroller, 2, 1);
+            gtk_widget_set_size_request(scroller, -1, 120);
+            gtk_container_add(scroller, notes);
+            pack(content, scroller, true);
+            self.update_dialog_status = label(
+                "При обновлении сохраняются настройки, игра и моды.",
+                "caption",
+            );
+            pack(content, self.update_dialog_status, false);
+            gtk_dialog_add_button(dialog, c"Открыть релиз".as_ptr(), 1);
+            gtk_dialog_add_button(dialog, c"Позже".as_ptr(), -6);
+            let install = gtk_dialog_add_button(dialog, c"Обновить".as_ptr(), -3);
+            style(install, "primary");
+            g_signal_connect_data(
+                dialog,
+                c"response".as_ptr(),
+                Some(std::mem::transmute::<
+                    unsafe extern "C" fn(W, c_int, W),
+                    unsafe extern "C" fn(),
+                >(update_response)),
+                (self as *mut App).cast(),
+                ptr::null_mut(),
+                0,
+            );
+            gtk_widget_show_all(dialog);
+        }
+    }
+
+    fn respond_update(&mut self, response: c_int) -> Result<()> {
+        if self.capture.is_some() || (self.child.is_some() && self.action == "self-update") {
+            return Ok(());
+        }
+        if response == 1 {
+            let url = self
+                .update_release
+                .as_ref()
+                .map(|r| {
+                    format!(
+                        "https://github.com/Velmi1337/ALOL/releases/tag/v{}",
+                        r.version
+                    )
+                })
+                .unwrap_or_else(|| "https://github.com/Velmi1337/ALOL/releases/latest".into());
+            Command::new("xdg-open")
+                .arg(url)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        if response == -3 && self.update_installed {
+            return self.dispatch(Action::Update);
+        }
+        if response == -3
+            && let Some(release) = &self.update_release
+        {
+            let version = release.version.clone();
+            self.start_args("self-update", &[version])?;
+            if self.child.is_some() {
+                set_label(
+                    self.update_dialog_status,
+                    "Загрузка и установка обновления… Для системного пакета подтвердите запрос прав.",
+                );
+                unsafe {
+                    for response in [1, -6, -3] {
+                        gtk_dialog_set_response_sensitive(self.update_dialog, response, 0);
+                    }
+                    gtk_window_set_deletable(self.update_dialog, 0);
+                }
+            }
+            return Ok(());
+        }
+        let dialog = self.update_dialog;
+        self.update_dialog = ptr::null_mut();
+        self.update_dialog_status = ptr::null_mut();
+        if !dialog.is_null() {
+            unsafe {
+                gtk_widget_destroy(dialog);
+            }
+        }
+        if response == -3 {
+            self.check_updates(true);
+        }
+        Ok(())
+    }
+
+    fn finish_update_dialog(&mut self, success: bool) {
+        if self.update_dialog.is_null() {
+            return;
+        }
+        set_label(
+            self.update_dialog_status,
+            if success {
+                "Обновление установлено. Нажмите «Перезапустить», чтобы открыть новую версию."
+            } else {
+                "Обновление не установлено. Подробности во вкладке «Журнал». Можно повторить проверку."
+            },
+        );
+        unsafe {
+            gtk_window_set_deletable(self.update_dialog, 1);
+            for response in [1, -6, -3] {
+                gtk_dialog_set_response_sensitive(self.update_dialog, response, 1);
+            }
+            gtk_button_set_label(
+                gtk_dialog_get_widget_for_response(self.update_dialog, -3),
+                c(if success {
+                    "Перезапустить"
+                } else {
+                    "Проверить снова"
+                })
+                .as_ptr(),
+            );
+            gtk_button_set_label(
+                gtk_dialog_get_widget_for_response(self.update_dialog, -6),
+                c"Закрыть".as_ptr(),
+            );
+        }
+    }
+}
+
+unsafe extern "C" fn update_response(_: W, response: c_int, data: W) {
+    let app = unsafe { &mut *(data as *mut App) };
+    if let Err(error) = app.respond_update(response) {
+        set_label(app.status, &error);
+        if !app.update_dialog_status.is_null() {
+            set_label(app.update_dialog_status, &error);
+        }
+    }
+}
+
+fn bounded_size(width: i32, height: i32, area_width: i32, area_height: i32) -> (i32, i32) {
+    (
+        width.min(area_width.saturating_sub(64).max(1)),
+        height.min(area_height.saturating_sub(96).max(1)),
+    )
+}
+
+fn fit_window_size(width: i32, height: i32) -> (i32, i32) {
+    unsafe {
+        let display = gdk_display_get_default();
+        let mut monitor = gdk_display_get_primary_monitor(display);
+        if monitor.is_null() {
+            monitor = gdk_display_get_monitor(display, 0);
+        }
+        if monitor.is_null() {
+            return (width, height);
+        }
+        let mut area = Rectangle::default();
+        gdk_monitor_get_workarea(monitor, &mut area);
+        bounded_size(width, height, area.width, area.height)
+    }
+}
+
+fn window_icon(window: W) {
+    unsafe {
+        let loader = gdk_pixbuf_loader_new_with_type(c"png".as_ptr(), ptr::null_mut());
+        if loader.is_null() {
+            return;
+        }
+        if gdk_pixbuf_loader_write(
+            loader,
+            desktop::ICON.as_ptr(),
+            desktop::ICON.len(),
+            ptr::null_mut(),
+        ) != 0
+            && gdk_pixbuf_loader_close(loader, ptr::null_mut()) != 0
+        {
+            let pixbuf = gdk_pixbuf_loader_get_pixbuf(loader);
+            if !pixbuf.is_null() {
+                gtk_window_set_default_icon(pixbuf);
+                gtk_window_set_icon(window, pixbuf);
+            }
+        }
+        g_object_unref(loader);
     }
 }
 
@@ -1411,6 +1723,7 @@ tooltip, tooltip.background { background: #292c3c; color: #ebedf5; border: 1px s
 scrollbar { background: #171923; }
 scrollbar slider { background: #555b77; border-radius: 8px; min-width: 8px; min-height: 8px; }
 scrollbar slider:hover { background: #8580ab; }
+.release-notes, .release-notes text { font-family: Sans; font-size: 14px; color: #ebedf5; }
 "#;
 
 pub fn run() -> Result<()> {
@@ -1421,6 +1734,8 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
     let player = PlayerProfile::load(&settings)?;
     let game_options = GameOptions::load(&settings)?;
     unsafe {
+        g_set_prgname(c"alol".as_ptr());
+        g_set_application_name(c"ALOL".as_ptr());
         if gtk_init_check(ptr::null_mut(), ptr::null_mut()) == 0 {
             return Err("Нет графической сессии. Используйте alol --help для CLI.".into());
         }
@@ -1437,9 +1752,17 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         g_object_unref(provider);
         let window = gtk_window_new(0);
         gtk_window_set_title(window, c"ALOL — Arizona Launcher On Linux".as_ptr());
-        gtk_window_set_default_size(window, 800, 760);
+        let (width, height) = fit_window_size(860, 760);
+        gtk_window_set_default_size(window, width, height);
         gtk_window_set_position(window, 1);
         gtk_window_set_icon_name(window, c"alol".as_ptr());
+        window_icon(window);
+        if capture_output.is_none()
+            && !std::env::args().any(|a| a == "--smoke-test")
+            && let Err(error) = desktop::integrate()
+        {
+            eprintln!("Интеграция с рабочим столом: {error}");
+        }
         let outer = box_new(true, 16);
         gtk_container_set_border_width(outer, 26);
         gtk_container_add(window, outer);
@@ -1507,6 +1830,9 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             discrete_gpu: ptr::null_mut(),
             debug: ptr::null_mut(),
             no_sync: ptr::null_mut(),
+            launcher_compatibility: ptr::null_mut(),
+            update_policy: ptr::null_mut(),
+            update_notifications: ptr::null_mut(),
         };
         let mut app = Box::new(App {
             settings: settings.clone(),
@@ -1560,22 +1886,33 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             update_release: None,
             update_installed: false,
             executable: std::env::current_exe().map_err(|e| e.to_string())?,
+            update_dialog: ptr::null_mut(),
+            update_dialog_status: ptr::null_mut(),
+            update_prompt_pending: false,
+            update_manual: false,
         });
         let update_column = box_new(true, 4);
+        gtk_label_set_max_width_chars(app.update_label, 32);
         pack(update_column, app.update_label, false);
         app.update_button =
             app.button(update_column, "Проверить обновления", Action::Update, false);
         pack(header, update_column, false);
         let player_controls = app.build_player_controls()?;
         pack(home, player_controls, false);
-        let play_row = action_row();
+        let play_row = if width < 800 {
+            let row = box_new(true, 8);
+            style(row, "actions");
+            row
+        } else {
+            action_row()
+        };
         app.play = app.button(play_row, "Установить Arizona  →", Action::Play, true);
         app.button(play_row, "Обновить игру", Action::Work("launch"), false);
         app.button(play_row, "Папка игры", Action::Folder, false);
         pack(home, play_row, false);
         let maintenance = box_new(true, 10);
         let expander = gtk_expander_new(c"Установка и обслуживание".as_ptr());
-        gtk_expander_set_expanded(expander, game::game_executable(&settings).is_err().into());
+        gtk_expander_set_expanded(expander, 0);
         gtk_container_add(expander, maintenance);
         pack(home, expander, false);
         let installer_row = action_row();
@@ -1607,7 +1944,6 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             Action::Work("prepare"),
             false,
         );
-        app.button(row, "Установить лаунчер", Action::Work("install"), false);
         pack(maintenance, row, false);
         let row = action_row();
         app.button(row, "Починить окружение", Action::Work("repair"), false);
@@ -1658,6 +1994,45 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         gtk_container_add(mods_scroller, mods_page);
         notebook_page(notebook, mods_scroller, "Моды", tab_sizes);
         notebook_page(notebook, log_page, "Журнал", tab_sizes);
+        pack(settings_page, label("Настройки ALOL", "alol-title"), false);
+        pack(
+            settings_page,
+            label("Проверять обновления", "field-label"),
+            false,
+        );
+        let update_policy = gtk_combo_box_text_new();
+        gtk_widget_set_name(update_policy, c"alol-update-policy".as_ptr());
+        for title in [
+            "При каждом запуске",
+            "Раз в сутки",
+            "Раз в неделю",
+            "Только вручную",
+        ] {
+            gtk_combo_box_text_append_text(update_policy, c(title).as_ptr());
+        }
+        gtk_combo_box_set_active(
+            update_policy,
+            ["startup", "daily", "weekly", "manual"]
+                .iter()
+                .position(|p| *p == settings.update_policy)
+                .unwrap_or(0) as i32,
+        );
+        pack(settings_page, update_policy, false);
+        let update_notifications = check(
+            settings_page,
+            "Показывать окно, когда доступна новая версия",
+            settings.update_notifications,
+        );
+        gtk_widget_set_name(update_notifications, c"alol-update-notifications".as_ptr());
+        pack(
+            settings_page,
+            label(
+                "Настройки обновлений сохраняются сразу. Ручная проверка доступна вверху окна.",
+                "caption",
+            ),
+            false,
+        );
+        pack(settings_page, gtk_separator_new(0), false);
         pack(
             settings_page,
             label("Настройки Arizona", "alol-title"),
@@ -1762,6 +2137,12 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             "Отключить GPU в официальном лаунчере (при пустом окне)",
             settings.disable_gpu,
         );
+        let launcher_compatibility = check(
+            settings_page,
+            "Совместимый запуск Arizona: XWayland и чистое окружение",
+            settings.launcher_compatibility,
+        );
+        gtk_widget_set_tooltip_text(launcher_compatibility, c"Только официальный лаунчер и установщик: убирает конфликтующие переменные dotfiles и оверлеев; использует XWayland при доступном DISPLAY. Параметры самой игры сохраняются.".as_ptr());
         let discrete_gpu = check(
             settings_page,
             "Второй GPU · DRI_PRIME=1 (Mesa)",
@@ -1789,7 +2170,12 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             discrete_gpu,
             debug,
             no_sync,
+            launcher_compatibility,
+            update_policy,
+            update_notifications,
         };
+        app.connect_action(update_policy, "changed", Action::UpdatePreferences);
+        app.connect_action(update_notifications, "toggled", Action::UpdatePreferences);
         let row = action_row();
         app.button(row, "Сохранить", Action::Save, true);
         app.button(row, "Настройки Wine", Action::Work("winecfg"), false);
@@ -1827,7 +2213,10 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         if std::env::args().any(|a| a == "--smoke-test") {
             g_timeout_add(1400, Some(smoke_quit), ptr::null_mut());
         }
-        if app.capture.is_none() && !std::env::args().any(|a| a == "--smoke-test") {
+        if app.capture.is_none()
+            && app.settings.update_policy != "manual"
+            && !std::env::args().any(|a| a == "--smoke-test")
+        {
             app.check_updates(false);
         }
         gtk_main();
@@ -1858,4 +2247,15 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    #[test]
+    fn initial_size_fits_smaller_workareas() {
+        assert_eq!(bounded_size(860, 760, 1920, 1080), (860, 760));
+        assert_eq!(bounded_size(860, 760, 1280, 720), (860, 624));
+        assert_eq!(bounded_size(860, 760, 640, 480), (576, 384));
+    }
 }

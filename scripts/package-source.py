@@ -20,6 +20,7 @@ TOP_LEVEL = (
 DIRECTORIES = ("src", "assets", "docs", "tests", "packaging", "scripts", ".github")
 EXTENSIONS = {".rs", ".py", ".sh", ".md", ".json", ".svg", ".desktop", ".in", ".png", ".yml"}
 SCREENSHOTS = {"docs/screenshots/main.png", "docs/screenshots/settings.png", "docs/screenshots/mods.png"}
+ICONS = {"assets/alol.png"}
 SECRETS = re.compile(rb"(?:/home/[A-Za-z0-9_.-]+|/Users/[A-Za-z0-9_.-]+|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----)")
 
 
@@ -35,7 +36,7 @@ def source_files():
             if path.is_file():
                 if path.suffix not in EXTENSIONS:
                     raise ValueError(f"Unexpected source file: {relative}")
-                if path.suffix == ".png" and relative.as_posix() not in SCREENSHOTS:
+                if path.suffix == ".png" and relative.as_posix() not in SCREENSHOTS | ICONS:
                     raise ValueError(f"Unexpected screenshot: {relative}")
                 paths.append(path)
     for path in paths:
@@ -74,7 +75,9 @@ def audit_png(name, data):
     if not ended or header is None:
         raise ValueError(f"Incomplete screenshot: {name}")
     width, height, depth, color, compression, filtering, interlace = header
-    if not (640 <= width <= 4096 and 480 <= height <= 4096 and depth == 8
+    icon = name.endswith("assets/alol.png") or name.endswith("apps/alol.png")
+    dimensions = (width == 256 and height == 256) if icon else (640 <= width <= 4096 and 480 <= height <= 4096)
+    if not (dimensions and depth == 8
             and color in (2, 6) and (compression, filtering, interlace) == (0, 0, 0)):
         raise ValueError(f"Unsupported screenshot dimensions/format: {name}")
     expected = height * (1 + width * (3 if color == 2 else 4))

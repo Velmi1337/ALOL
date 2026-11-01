@@ -7,6 +7,7 @@ cd "$alol_source"
 cargo build --offline --release
 install -Dm755 target/release/alol "$alol_prefix/bin/alol"
 install -Dm644 assets/alol.svg "$alol_prefix/share/icons/hicolor/scalable/apps/alol.svg"
+install -Dm644 assets/alol.png "$alol_prefix/share/icons/hicolor/256x256/apps/alol.png"
 python3 - "$alol_prefix" <<'PY'
 import pathlib, sys
 prefix = pathlib.Path(sys.argv[1])
@@ -21,7 +22,7 @@ applications.mkdir(parents=True, exist_ok=True)
     '[Desktop Entry]\nType=Application\nName=ALOL\n'
     'GenericName=Arizona Launcher On Linux\n'
     'Comment=Arizona RP через Wine и Proton\n'
-    f'Exec="{executable}"\nIcon=alol\nTerminal=false\n'
+    f'Exec="{executable}"\nIcon=alol\nStartupWMClass=alol\nTerminal=false\n'
     'Categories=Game;\nKeywords=Arizona;RP;Wine;Proton;ALOL;\nStartupNotify=false\n',
     encoding='utf-8')
 print(f'Установлено: {prefix / "bin/alol"}')

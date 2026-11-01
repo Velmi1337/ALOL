@@ -23,7 +23,7 @@
 ### Arch Linux / CachyOS
 
 ```sh
-sudo pacman -U ./alol-0.5.4-1-x86_64.pkg.tar.zst
+sudo pacman -U ./alol-0.5.5-1-x86_64.pkg.tar.zst
 ```
 
 Нужны включённый `multilib` и подходящие 32/64-битные графические драйверы.
@@ -31,7 +31,7 @@ sudo pacman -U ./alol-0.5.4-1-x86_64.pkg.tar.zst
 ### Fedora 44+
 
 ```sh
-sudo dnf install ./alol-0.5.4-1.fc44.x86_64.rpm
+sudo dnf install ./alol-0.5.5-1.fc44.x86_64.rpm
 ```
 
 RPM установит Wine, winetricks и русскую локаль. GE-Proton доступен при установленном UMU.

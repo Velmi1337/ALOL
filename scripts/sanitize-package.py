@@ -16,6 +16,7 @@ def main():
     allowed = {
         ".PKGINFO", ".BUILDINFO", ".MTREE", "usr/bin/alol",
         "usr/share/applications/alol.desktop", "usr/share/icons/hicolor/scalable/apps/alol.svg",
+        "usr/share/icons/hicolor/256x256/apps/alol.png",
         "usr/share/licenses/alol/LICENSE", "usr/share/doc/alol/README.md",
     }
     names = subprocess.check_output(["bsdtar", "-tf", str(package)], text=True).splitlines()

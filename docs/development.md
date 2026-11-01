@@ -27,11 +27,18 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/update_integration.py
 ```sh
 GTK_THEME=Adwaita PYTHONDONTWRITEBYTECODE=1 python3 tests/gui_theme.py
 GTK_THEME=Adwaita:dark PYTHONDONTWRITEBYTECODE=1 python3 tests/gui_theme.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/gui_app.py
 ```
 
 Тесты обновлений используют отдельную копию ALOL во временной папке, локальные
 фикстуры GitHub и подставной пакетный менеджер. Настоящий установленный ALOL
 и системные пакеты при проверках не обновляются.
+
+`tests/gui_app.py` проверяет настоящее окно ALOL через временный GTK test module:
+автопроверку, ручной режим, окно релиза, сохранение настроек, отмену и повтор после
+ошибки, иконку и desktop identity. Нужны графическая сессия и GTK development headers.
+Тесты запуска Wine подставляют конфликтующие переменные Hyprland/niri и проверяют,
+что совместимый режим ограничивается официальным лаунчером.
 
 ## Публикация и проверка файлов
 

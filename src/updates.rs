@@ -24,6 +24,7 @@ const CURRENT: &str = env!("CARGO_PKG_VERSION");
 #[derive(Clone, Debug)]
 pub struct Release {
     pub version: String,
+    pub notes: String,
     assets: Vec<Asset>,
 }
 #[derive(Clone, Debug)]
@@ -93,6 +94,13 @@ impl Release {
         }
         Ok(Self {
             version: release_version.into(),
+            notes: value
+                .get("body")
+                .text()
+                .chars()
+                .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+                .take(16000)
+                .collect(),
             assets,
         })
     }
@@ -140,10 +148,28 @@ impl Drop for Staging {
 
 /// Cache successful checks for a day. A manual check always reaches GitHub.
 pub fn check(force: bool) -> Result<Option<Release>> {
+    check_cached(if force { 0 } else { 86400 })
+}
+
+pub fn check_scheduled(policy: &str) -> Result<Option<Release>> {
+    match policy {
+        "startup" => check_cached(0),
+        "daily" => check_cached(86400),
+        "weekly" => check_cached(7 * 86400),
+        "manual" => Ok(None),
+        _ => Err("Неизвестный режим проверки обновлений".into()),
+    }
+}
+
+fn cache_fresh(checked_at: u64, timestamp: u64, interval: u64) -> bool {
+    checked_at <= timestamp && timestamp - checked_at < interval
+}
+
+fn check_cached(interval: u64) -> Result<Option<Release>> {
     if std::env::consts::ARCH != "x86_64" {
         return Err("Автообновление доступно для x86_64 Linux".into());
     }
-    let value = if !force {
+    let value = if interval > 0 {
         fs::read_to_string(cache_file())
             .ok()
             .filter(|s| s.len() <= 2 * 1024 * 1024)
@@ -152,7 +178,7 @@ pub fn check(force: bool) -> Result<Option<Release>> {
                 v.get("checked_at")
                     .text()
                     .parse::<u64>()
-                    .is_ok_and(|t| t <= now() && now() - t < 86400)
+                    .is_ok_and(|t| cache_fresh(t, now(), interval))
             })
             .map(|v| v.get("release").clone())
     } else {
@@ -386,6 +412,14 @@ pub fn install(expected: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn schedules_do_not_cache_startup_checks_or_future_timestamps() {
+        assert!(!cache_fresh(100, 100, 0));
+        assert!(cache_fresh(100, 101, 86400));
+        assert!(!cache_fresh(100, 86500, 86400));
+        assert!(cache_fresh(100, 86500, 7 * 86400));
+        assert!(!cache_fresh(101, 100, 86400));
+    }
     #[test]
     fn versions_compare_numerically_and_reject_tags_with_paths() {
         assert!(version("0.10.0").unwrap() > version("0.9.99").unwrap());

@@ -142,6 +142,14 @@ class DirectGame(unittest.TestCase):
         self.run_alol('play',success=False)
         self.assertEqual(len(self.calls()),count);self.assertEqual(self.native.read_bytes(),before)
 
+    def test_game_preserves_user_graphics_environment(self):
+        self.run_alol('play', DISPLAY=':123', WAYLAND_DISPLAY='wayland-test', GDK_BACKEND='wayland',
+                      QT_QPA_PLATFORM='wayland', MANGOHUD='1', PROTON_ENABLE_WAYLAND='1')
+        call = self.game_calls()[-1]
+        self.assertEqual(call['wayland'], 'wayland-test')
+        self.assertEqual(call['mangohud'], '1')
+        self.assertEqual(call['proton_wayland'], '1')
+
     def test_upgrade_removes_passwords_and_only_owned_helper_files(self):
         old={'server_id':'30','nickname':'Native_Name','nicknames':{'30':'Native_Name','1':'Other_Name'},
              'logins':{'30':{'nickname':'Native_Name','enabled':True,'password':'retired-test-secret'}}}

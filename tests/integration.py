@@ -22,7 +22,11 @@ with open(os.environ['ALOL_TEST_TRACE'], 'a') as f:
         'verb': os.environ.get('PROTON_VERB'), 'wined3d': os.environ.get('PROTON_USE_WINED3D'),
         'winearch': os.environ.get('WINEARCH'), 'prime': os.environ.get('DRI_PRIME'),
         'install_path': os.environ.get('STEAM_COMPAT_INSTALL_PATH'), 'cwd': os.getcwd(),
-        'lc_all': os.environ.get('LC_ALL'), 'lang': os.environ.get('LANG')}) + '\n')
+        'lc_all': os.environ.get('LC_ALL'), 'lang': os.environ.get('LANG'),
+        'qt': os.environ.get('QT_QPA_PLATFORM'), 'gdk': os.environ.get('GDK_BACKEND'),
+        'wayland': os.environ.get('WAYLAND_DISPLAY'), 'display': os.environ.get('DISPLAY'),
+        'session': os.environ.get('XDG_SESSION_TYPE'), 'mangohud': os.environ.get('MANGOHUD'),
+        'proton_wayland': os.environ.get('PROTON_ENABLE_WAYLAND')}) + '\n')
 if os.environ.get('ALOL_TEST_FAIL') == exe:
     (p / 'drive_c').mkdir(parents=True, exist_ok=True)
     print('injected runner error', flush=True)
@@ -275,6 +279,47 @@ class Workflow(unittest.TestCase):
         result=self.run_alol('install',success=False,ALOL_TEST_NO_RU_LOCALE='1')
         self.assertIn('locale-gen',result.stderr)
         self.assertFalse((self.prefix/'.alol-language-ru-v1').exists())
+
+    def test_launcher_compatibility_uses_xwayland_without_dotfile_overrides(self):
+        overrides = dict(DISPLAY=":123", WAYLAND_DISPLAY="wayland-test", XDG_SESSION_TYPE="wayland",
+                         QT_QPA_PLATFORM="wayland", GDK_BACKEND="wayland", MANGOHUD="1", PROTON_ENABLE_WAYLAND="1")
+        self.run_alol('install', **overrides)
+        self.run_alol('launch', **overrides)
+        call = self.calls()[-1]
+        self.assertEqual(call['display'], ':123')
+        self.assertIsNone(call['wayland'])
+        self.assertIsNone(call['mangohud'])
+        self.assertEqual(call['proton_wayland'], '0')
+        self.assertEqual(call['qt'], 'xcb')
+        self.assertEqual(call['gdk'], 'x11')
+        self.assertEqual(call['session'], 'x11')
+
+    def test_launcher_native_mode_preserves_custom_environment(self):
+        self.write_config(launcher_compatibility='false')
+        self.run_alol('install', DISPLAY='', WAYLAND_DISPLAY='wayland-test', XDG_SESSION_TYPE='wayland',
+                      QT_QPA_PLATFORM='wayland', GDK_BACKEND='wayland', MANGOHUD='1')
+        call = self.calls()[-1]
+        self.assertEqual(call['wayland'], 'wayland-test')
+        self.assertEqual(call['qt'], 'wayland')
+        self.assertEqual(call['mangohud'], '1')
+
+    def test_missing_xwayland_has_actionable_niri_error(self):
+        result = self.run_alol('install', success=False, DISPLAY='', WAYLAND_DISPLAY='wayland-test', XDG_SESSION_TYPE='wayland')
+        self.assertIn('xwayland-satellite', result.stderr)
+        self.assertFalse((self.prefix/'drive_c/Arizona Games Launcher/Arizona Games Launcher.exe').exists())
+
+    def test_failed_launcher_retries_without_gpu_once(self):
+        self.write_config(disable_gpu='false')
+        self.run_alol('install')
+        exe = self.prefix/'drive_c/Arizona Games Launcher/Arizona Games Launcher.exe'
+        before = len(self.calls())
+        result = self.run_alol('launch', success=False, ALOL_TEST_FAIL=str(exe))
+        calls = self.calls()[before:]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]['args'][1:], ['--no-sandbox'])
+        self.assertEqual(calls[1]['args'][1:], ['--no-sandbox', '--disable-gpu'])
+        self.assertIn('Повторный запуск', result.stdout)
+        self.assertIn('disable_gpu=false', self.config.read_text())
 
 
 if __name__ == "__main__":

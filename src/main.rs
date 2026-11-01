@@ -1,5 +1,6 @@
 mod archive;
 mod core;
+mod desktop;
 mod game;
 mod game_options;
 mod gui;

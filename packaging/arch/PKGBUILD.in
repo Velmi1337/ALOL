@@ -46,6 +46,7 @@ package() {
     install -Dm755 target/release/alol "$pkgdir/usr/bin/alol"
     install -Dm644 assets/alol.desktop "$pkgdir/usr/share/applications/alol.desktop"
     install -Dm644 assets/alol.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/alol.svg"
+    install -Dm644 assets/alol.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/alol.png"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/alol/LICENSE"
     install -Dm644 README.md "$pkgdir/usr/share/doc/alol/README.md"
 }

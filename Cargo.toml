@@ -1,6 +1,6 @@
 [package]
 name = "alol"
-version = "0.5.4"
+version = "0.5.5"
 edition = "2024"
 description = "Arizona Launcher On Linux — lightweight native Rust launcher"
 license = "MIT"

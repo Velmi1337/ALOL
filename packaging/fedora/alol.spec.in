@@ -63,6 +63,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/update_integration.py
 install -Dm755 target/release/alol %{buildroot}%{_bindir}/alol
 install -Dm644 assets/alol.desktop %{buildroot}%{_datadir}/applications/alol.desktop
 install -Dm644 assets/alol.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/alol.svg
+install -Dm644 assets/alol.png %{buildroot}%{_datadir}/icons/hicolor/256x256/apps/alol.png
 
 %files
 %defattr(-,root,root,-)
@@ -71,3 +72,4 @@ install -Dm644 assets/alol.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/ap
 %{_bindir}/alol
 %{_datadir}/applications/alol.desktop
 %{_datadir}/icons/hicolor/scalable/apps/alol.svg
+%{_datadir}/icons/hicolor/256x256/apps/alol.png

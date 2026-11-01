@@ -6,6 +6,7 @@ Comment=Arizona RP через Wine и Proton
 Exec=alol
 TryExec=alol
 Icon=alol
+StartupWMClass=alol
 Terminal=false
 Categories=Game;
 Keywords=Arizona;RP;Wine;Proton;ALOL;

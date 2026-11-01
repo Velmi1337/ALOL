@@ -54,6 +54,9 @@ pub struct Settings {
     pub discrete_gpu: bool,
     pub debug: bool,
     pub no_sync: bool,
+    pub launcher_compatibility: bool,
+    pub update_policy: String,
+    pub update_notifications: bool,
 }
 
 impl Default for Settings {
@@ -71,10 +74,13 @@ impl Default for Settings {
             executable: String::new(),
             prefix_root: data_dir().join("prefixes").to_string_lossy().into(),
             wined3d: false,
-            disable_gpu: false,
+            disable_gpu: true,
             discrete_gpu: false,
             debug: false,
             no_sync: false,
+            launcher_compatibility: true,
+            update_policy: "startup".into(),
+            update_notifications: true,
         }
     }
 }
@@ -109,6 +115,9 @@ impl Settings {
                 "discrete_gpu" => self.discrete_gpu = v == "true",
                 "debug" => self.debug = v == "true",
                 "no_sync" => self.no_sync = v == "true",
+                "launcher_compatibility" => self.launcher_compatibility = v == "true",
+                "update_policy" => self.update_policy = v.into(),
+                "update_notifications" => self.update_notifications = v == "true",
                 _ => (),
             }
         }
@@ -117,6 +126,9 @@ impl Settings {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if !["startup", "daily", "weekly", "manual"].contains(&self.update_policy.as_str()) {
+            return Err("Неизвестный режим проверки обновлений".into());
+        }
         for value in [
             &self.runner,
             &self.proton,
@@ -168,7 +180,7 @@ impl Settings {
         let path = config_file();
         fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
         let text = format!(
-            "# ALOL 0.1 — пути записываются без кавычек\nrunner={}\nproton={}\nwine={}\ninstaller={}\nexecutable={}\nprefix_root={}\nwined3d={}\ndisable_gpu={}\ndiscrete_gpu={}\ndebug={}\nno_sync={}\n",
+            "# ALOL — пути записываются без кавычек\nrunner={}\nproton={}\nwine={}\ninstaller={}\nexecutable={}\nprefix_root={}\nwined3d={}\ndisable_gpu={}\ndiscrete_gpu={}\ndebug={}\nno_sync={}\nlauncher_compatibility={}\nupdate_policy={}\nupdate_notifications={}\n",
             self.runner,
             self.proton,
             self.wine,
@@ -179,7 +191,10 @@ impl Settings {
             self.disable_gpu,
             self.discrete_gpu,
             self.debug,
-            self.no_sync
+            self.no_sync,
+            self.launcher_compatibility,
+            self.update_policy,
+            self.update_notifications
         );
         // Unique temp file and atomic rename keep readers from seeing a partial config.
         let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
@@ -284,6 +299,9 @@ impl Settings {
         if self.runner == "wine" && self.wined3d {
             c.env("WINEDLLOVERRIDES", "d3d9,d3d10core,d3d11,dxgi=b");
         }
+        if self.launcher_compatibility && self.is_launcher(executable) {
+            launcher_environment(&mut c)?;
+        }
         c.arg(executable).args(args);
         if matches!(executable, WINEBOOT | REG | WINECFG) {
             // UMU preserves Windows paths, so Proton runs this real builtin rather
@@ -298,6 +316,64 @@ impl Settings {
         }
         Ok(c)
     }
+
+    fn is_launcher(&self, executable: &str) -> bool {
+        (!self.installer.is_empty() && executable == self.installer)
+            || (!self.executable.is_empty() && executable == self.executable)
+            || Path::new(executable).file_name().is_some_and(|n| {
+                [
+                    "arizona games launcher.exe",
+                    "arizona launcher.exe",
+                    "arizonalauncher.exe",
+                ]
+                .iter()
+                .any(|name| n.eq_ignore_ascii_case(name))
+            })
+    }
+}
+
+/// A launch-only environment: dotfile overrides and injected Linux overlays often
+/// break Wine's Electron process. Display/auth/runtime sockets stay available.
+fn launcher_environment(command: &mut Command) -> Result<()> {
+    for variable in [
+        "LD_PRELOAD",
+        "LD_AUDIT",
+        "LD_LIBRARY_PATH",
+        "GTK_THEME",
+        "GTK_MODULES",
+        "GTK_PATH",
+        "QT_QPA_PLATFORMTHEME",
+        "QT_STYLE_OVERRIDE",
+        "QT_PLUGIN_PATH",
+        "QT_QPA_PLATFORM_PLUGIN_PATH",
+        "QML2_IMPORT_PATH",
+        "ELECTRON_OZONE_PLATFORM_HINT",
+        "OZONE_PLATFORM",
+        "MANGOHUD",
+        "MANGOHUD_CONFIG",
+        "MANGOHUD_DLSYM",
+        "ENABLE_VKBASALT",
+        "VK_INSTANCE_LAYERS",
+        "VK_LAYER_PATH",
+        "VK_ADD_LAYER_PATH",
+        "DXVK_HUD",
+    ] {
+        command.env_remove(variable);
+    }
+    if env::var_os("DISPLAY").is_some_and(|s| !s.is_empty()) {
+        command
+            .env_remove("WAYLAND_DISPLAY")
+            .env("PROTON_ENABLE_WAYLAND", "0")
+            .env("GDK_BACKEND", "x11")
+            .env("QT_QPA_PLATFORM", "xcb")
+            .env("SDL_VIDEODRIVER", "x11")
+            .env("XDG_SESSION_TYPE", "x11");
+    } else if env::var("XDG_SESSION_TYPE").is_ok_and(|s| s == "wayland")
+        || env::var_os("WAYLAND_DISPLAY").is_some_and(|s| !s.is_empty())
+    {
+        return Err("Для совместимого запуска Arizona нужен XWayland (DISPLAY). В niri проверьте установку xwayland-satellite; в Hyprland — поддержку XWayland. Либо отключите совместимый запуск в настройках ALOL для использования нативного Wine Wayland.".into());
+    }
+    Ok(())
 }
 
 pub fn available(name: &str) -> bool {
@@ -622,7 +698,22 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
                 vec!["--no-sandbox"]
             };
             let watched = exe.parent().map(|p| p.join("bin/arizona"));
-            run_managed(&s, &exe.to_string_lossy(), &args, watched)?;
+            let result = run_managed(&s, &exe.to_string_lossy(), &args, watched.clone());
+            if result.is_err()
+                && s.launcher_compatibility
+                && !s.disable_gpu
+                && !TERMINATED.load(Ordering::Relaxed)
+            {
+                println!("Официальный лаунчер завершился с ошибкой. Повторный запуск без GPU…");
+                run_managed(
+                    &s,
+                    &exe.to_string_lossy(),
+                    &["--no-sandbox", "--disable-gpu"],
+                    watched,
+                )?;
+            } else {
+                result?;
+            }
             pin_proton(&s)?;
         }
         "repair" => {
@@ -1009,6 +1100,16 @@ pub fn doctor(s: &Settings) -> String {
         }
     ));
     out.push_str("\nGE-Proton запускается через UMU; первый запуск требует интернета и нескольких ГБ.\nПрефиксы Wine и Proton раздельные. Проверка файлов игры — в официальном лаунчере.\nПосле успешной подготовки сборка Proton закрепляется. Для обновления выберите GE-Proton снова.\nЕсли лаунчер пустой: включите «Отключить GPU в лаунчере».\nЕсли игра не отображается: попробуйте WineD3D.\n");
+    out.push_str(&format!(
+        "\nСовместимый запуск лаунчера: {}\nXWayland / DISPLAY: {}\nПроверка обновлений: {}\n",
+        s.launcher_compatibility,
+        if env::var_os("DISPLAY").is_some_and(|s| !s.is_empty()) {
+            "доступен"
+        } else {
+            "не задан"
+        },
+        s.update_policy
+    ));
     out
 }
 
@@ -1048,6 +1149,24 @@ pub fn tail_log() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn update_preferences_migrate_and_validate() {
+        let mut settings = Settings::default();
+        assert_eq!(
+            settings.parse("runner=wine\n").unwrap().update_policy,
+            "startup"
+        );
+        assert!(settings.update_notifications);
+        let saved = settings
+            .parse(
+                "update_policy=manual\nupdate_notifications=false\nlauncher_compatibility=false\n",
+            )
+            .unwrap();
+        assert_eq!(saved.update_policy, "manual");
+        assert!(!saved.update_notifications);
+        assert!(!saved.launcher_compatibility);
+        assert!(settings.parse("update_policy=never-ever\n").is_err());
+    }
     fn temp() -> PathBuf {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let p = env::temp_dir().join(format!(
