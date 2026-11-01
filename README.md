@@ -10,6 +10,7 @@
 <p>
   <a href="https://github.com/Velmi1337/ALOL/releases/latest"><strong>Скачать</strong></a> ·
   <a href="docs/guide.md">Руководство</a> ·
+  <a href="https://t.me/alolinux">Telegram</a> ·
   <a href="https://github.com/Velmi1337/ALOL/issues">Сообщить об ошибке</a>
 </p>
 
@@ -76,6 +77,13 @@ ALOL его не хранит.
 <img src="docs/screenshots/mods.png" width="760" alt="Каталог модов и управление установленными модами">
 
 </details>
+
+## Новости проекта
+
+> **ALOL в Telegram — [@alolinux](https://t.me/alolinux)**
+>
+> Новые версии, изменения и новости разработки — в канале проекта.
+> [**Подписаться →**](https://t.me/alolinux)
 
 ## Contributors
 
