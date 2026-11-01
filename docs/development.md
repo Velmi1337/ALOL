@@ -14,11 +14,24 @@ cargo build --offline --release
 PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/mods_integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/game_integration.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/update_integration.py
 ```
 
 Интеграционные тесты используют временные каталоги и подставные Windows-runner/API;
 они проверяют работу ALOL, а не совместимость игры с Wine.
 При доступной графической сессии: `target/release/alol --smoke-test`.
+
+Контраст всплывающих списков, разделов обслуживания и размер заголовка проверяются
+с реальными GTK-виджетами в светлой и тёмной темах:
+
+```sh
+GTK_THEME=Adwaita PYTHONDONTWRITEBYTECODE=1 python3 tests/gui_theme.py
+GTK_THEME=Adwaita:dark PYTHONDONTWRITEBYTECODE=1 python3 tests/gui_theme.py
+```
+
+Тесты обновлений используют отдельную копию ALOL во временной папке, локальные
+фикстуры GitHub и подставной пакетный менеджер. Настоящий установленный ALOL
+и системные пакеты при проверках не обновляются.
 
 ## Публикация и проверка файлов
 
@@ -30,6 +43,10 @@ PNG проверяются на целостность и отсутствие �
 перед публикацией снимки также проверяются визуально.
 Это автоматическая проверка распространённых утечек; перед публикацией также
 просмотрите изменения и не добавляйте личные настройки в исходники.
+
+Arch-сборка также экспортирует отдельный `alol-VERSION-linux-x86_64` для
+обновления локальной установки. Скрипт `scripts/package-binary.py` проверяет
+архитектуру и версию бинарника; аудит включает его в `SHA256SUMS`.
 
 Для готового чистого Git-коммита и тега текущей версии команда
 `./scripts/publish.sh` повторяет проверку, публикует репозиторий и GitHub Release.

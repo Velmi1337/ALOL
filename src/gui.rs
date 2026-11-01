@@ -1,14 +1,16 @@
 //! Small GTK 3 ABI surface. Widgets and signal data live on GTK's main thread.
-//! No webview, background polling thread, Cargo dependencies, or bundled toolkit.
+//! No webview, background polling loop, Cargo dependencies, or bundled toolkit.
 use crate::core::{self, Result, Settings};
 use crate::game::{self, PlayerProfile, Server};
 use crate::game_options::{self, GameOptions};
 use crate::mods::{self, CatalogMod, InstalledMod};
+use crate::updates::{self, Release};
 use std::{
     ffi::{CStr, CString, c_char, c_int, c_uint, c_void},
     os::unix::process::CommandExt,
     process::{Child, Command, Stdio},
     ptr,
+    sync::mpsc::{self, Receiver},
 };
 
 type W = *mut c_void;
@@ -16,6 +18,7 @@ type Callback = Option<unsafe extern "C" fn()>;
 #[link(name = "gtk-3")]
 unsafe extern "C" {
     fn gtk_init_check(argc: *mut c_int, argv: *mut *mut *mut c_char) -> c_int;
+    fn gtk_settings_get_default() -> W;
     fn gtk_main();
     fn gtk_main_quit();
     fn gtk_window_new(kind: c_int) -> W;
@@ -132,6 +135,7 @@ unsafe extern "C" {
         flags: c_uint,
     ) -> u64;
     fn g_object_unref(object: W);
+    fn g_object_set(object: W, first_property: *const c_char, ...);
     fn g_signal_handler_block(instance: W, handler: u64);
     fn g_signal_handler_unblock(instance: W, handler: u64);
 }
@@ -249,6 +253,7 @@ enum Action {
     ModImport,
     ModManage(&'static str),
     PlayerChanged,
+    Update,
 }
 struct Signal {
     app: *mut App,
@@ -309,6 +314,12 @@ struct App {
     updating_player: bool,
     player_signal: u64,
     capture: Option<Capture>,
+    update_label: W,
+    update_button: W,
+    update_receiver: Option<Receiver<Result<Option<Release>>>>,
+    update_release: Option<Release>,
+    update_installed: bool,
+    executable: std::path::PathBuf,
 }
 struct Capture {
     output: std::path::PathBuf,
@@ -362,7 +373,11 @@ impl App {
             pack(parent, button, equal_columns);
             if matches!(
                 action,
-                Action::Work(_) | Action::Play | Action::Save | Action::ChooseInstaller
+                Action::Work(_)
+                    | Action::Play
+                    | Action::Save
+                    | Action::ChooseInstaller
+                    | Action::Update
             ) {
                 self.buttons.push(button);
             }
@@ -513,7 +528,7 @@ impl App {
         self.save()?;
         let file = core::open_log()?;
         let stderr = file.try_clone().map_err(|e| e.to_string())?;
-        let mut cmd = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+        let mut cmd = Command::new(&self.executable);
         cmd.arg(action)
             .args(args)
             .stdout(Stdio::from(file))
@@ -540,6 +555,7 @@ impl App {
                 "libraries" => "Установка шрифтов и Visual C++…",
                 "winecfg" => "Открыты настройки Wine",
                 "doctor" => "Диагностика…",
+                "self-update" => "Загрузка и установка обновления ALOL…",
                 _ => "Выполняется…",
             },
         );
@@ -550,7 +566,8 @@ impl App {
             gtk_widget_set_sensitive(self.settings_page, 0);
             gtk_widget_set_sensitive(self.mods_page, 0);
             gtk_widget_set_sensitive(self.player_controls, 0);
-            gtk_widget_set_sensitive(self.stop, 1);
+            // Do not interrupt a privileged package transaction midway through installation.
+            gtk_widget_set_sensitive(self.stop, (action != "self-update").into());
             gtk_spinner_start(self.spinner);
             if action == "doctor" {
                 gtk_notebook_set_current_page(self.notebook, 3);
@@ -564,6 +581,25 @@ impl App {
             return Ok(());
         }
         match action {
+            Action::Update => {
+                if self.child.is_some() {
+                    return Ok(());
+                }
+                if self.update_installed {
+                    self.persist_player(true)?;
+                    Command::new(&self.executable)
+                        .spawn()
+                        .map_err(|e| e.to_string())?;
+                    unsafe {
+                        gtk_main_quit();
+                    }
+                } else if let Some(release) = &self.update_release {
+                    let version = release.version.clone();
+                    self.start_args("self-update", &[version])?;
+                } else {
+                    self.check_updates(true);
+                }
+            }
             Action::Work(op) => self.start(op)?,
             Action::PlayerChanged => {
                 if !self.updating_player {
@@ -841,7 +877,7 @@ impl App {
             let page = box_new(true, 10);
             gtk_container_set_border_width(page, 12);
             self.mods_page = page;
-            pack(page, label("Моды Arizona", "title"), false);
+            pack(page, label("Моды Arizona", "alol-title"), false);
             pack(
                 page,
                 label(
@@ -1043,6 +1079,7 @@ impl App {
     }
 
     fn tick(&mut self) {
+        self.poll_updates();
         if let Err(e) = self.persist_player(false) {
             set_label(self.status, &format!("Не сохранить ник и сервер: {e}"));
         }
@@ -1059,6 +1096,30 @@ impl App {
                 Ok(Some(status)) => {
                     let stopped = self.stop_at.take().is_some();
                     self.child = None;
+                    if self.action == "self-update" {
+                        if status.success() {
+                            self.update_installed = true;
+                            set_label(
+                                self.update_label,
+                                "Обновление установлено. Перезапустите ALOL.",
+                            );
+                            unsafe {
+                                gtk_button_set_label(self.update_button, c"Перезапустить".as_ptr());
+                            }
+                        } else {
+                            self.update_release = None;
+                            set_label(
+                                self.update_label,
+                                "Обновление не установлено. Подробности в журнале.",
+                            );
+                            unsafe {
+                                gtk_button_set_label(
+                                    self.update_button,
+                                    c"Повторить проверку".as_ptr(),
+                                );
+                            }
+                        }
+                    }
                     if let Ok(s) = Settings::load() {
                         unsafe {
                             gtk_entry_set_text(self.fields.proton, c(&s.proton).as_ptr());
@@ -1088,11 +1149,20 @@ impl App {
                     );
                     unsafe {
                         for b in &self.buttons {
-                            gtk_widget_set_sensitive(*b, 1);
+                            gtk_widget_set_sensitive(
+                                *b,
+                                (!self.update_installed || *b == self.update_button).into(),
+                            );
                         }
-                        gtk_widget_set_sensitive(self.settings_page, 1);
-                        gtk_widget_set_sensitive(self.mods_page, 1);
-                        gtk_widget_set_sensitive(self.player_controls, 1);
+                        gtk_widget_set_sensitive(
+                            self.settings_page,
+                            (!self.update_installed).into(),
+                        );
+                        gtk_widget_set_sensitive(self.mods_page, (!self.update_installed).into());
+                        gtk_widget_set_sensitive(
+                            self.player_controls,
+                            (!self.update_installed).into(),
+                        );
                         gtk_widget_set_sensitive(self.stop, 0);
                         gtk_spinner_stop(self.spinner);
                         if !status.success() && !stopped {
@@ -1110,6 +1180,74 @@ impl App {
                 gtk_text_buffer_set_text(self.log_buffer, c(&log).as_ptr(), -1);
             }
             self.log_text = log;
+        }
+    }
+
+    fn check_updates(&mut self, force: bool) {
+        if self.update_receiver.is_some() || self.update_installed {
+            return;
+        }
+        self.update_release = None;
+        set_label(self.update_label, "Проверка обновлений ALOL…");
+        unsafe {
+            gtk_widget_set_sensitive(self.update_button, 0);
+        }
+        let (sender, receiver) = mpsc::channel();
+        self.update_receiver = Some(receiver);
+        // One bounded check per launch or button click; GTK is only touched by the main thread.
+        std::thread::spawn(move || {
+            let _ = sender.send(updates::check(force));
+        });
+    }
+
+    fn poll_updates(&mut self) {
+        let result = match self.update_receiver.as_ref().map(Receiver::try_recv) {
+            Some(Ok(result)) => result,
+            Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                Err("Проверка обновлений прервана".into())
+            }
+            _ => return,
+        };
+        self.update_receiver = None;
+        match result {
+            Ok(Some(release)) => {
+                set_label(
+                    self.update_label,
+                    &format!(
+                        "Доступна ALOL {} · у вас {}",
+                        release.version,
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                );
+                self.update_release = Some(release);
+                unsafe {
+                    gtk_button_set_label(self.update_button, c"Обновить ALOL".as_ptr());
+                }
+            }
+            Ok(None) => {
+                set_label(
+                    self.update_label,
+                    &format!("ALOL {} · актуальная версия", env!("CARGO_PKG_VERSION")),
+                );
+                unsafe {
+                    gtk_button_set_label(self.update_button, c"Проверить обновления".as_ptr());
+                }
+            }
+            Err(_) => {
+                set_label(
+                    self.update_label,
+                    &format!(
+                        "ALOL {} · не удалось проверить обновления",
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                );
+                unsafe {
+                    gtk_button_set_label(self.update_button, c"Повторить проверку".as_ptr());
+                }
+            }
+        }
+        unsafe {
+            gtk_widget_set_sensitive(self.update_button, self.child.is_none().into());
         }
     }
 }
@@ -1208,15 +1346,22 @@ unsafe extern "C" fn capture_tick(data: W) -> c_int {
 }
 
 const CSS: &str = r#"
+@define-color theme_bg_color #12131a;
+@define-color theme_fg_color #ebedf5;
+@define-color theme_base_color #1c1e2a;
+@define-color theme_text_color #ebedf5;
+@define-color theme_selected_bg_color #544475;
+@define-color theme_selected_fg_color #ffffff;
+@define-color insensitive_fg_color #858a9f;
 window { background: #12131a; color: #ebedf5; }
 * { font-family: Sans; font-size: 14px; }
 .brand { font-size: 34px; font-weight: 900; letter-spacing: 3px; color: #bcacff; }
 .caption { color: #9a9eaf; font-size: 12px; }
-.title { font-size: 30px; font-weight: 800; }
+.alol-title { font-size: 30px; font-weight: 800; }
 .body { color: #b2b6c9; }
 .runtime { color: #c8bbff; font-size: 13px; }
 .field-label { font-size: 12px; color: #b8bcce; margin-top: 6px; }
-.card { background: #1c1e2a; border-radius: 16px; padding: 24px; }
+.card { background: #1c1e2a; border-radius: 16px; padding: 18px; }
 button { background: #292c3c; color: #e4e6f1; border: 1px solid #3a3e54; border-radius: 10px; min-height: 20px; padding: 11px 16px; box-shadow: none; text-shadow: none; transition: background-color 120ms ease, border-color 120ms ease; }
 button:hover { background: #35394d; border-color: #646281; }
 button:active { background: #232638; }
@@ -1241,6 +1386,31 @@ list { background: #1c1e2a; color: #ebedf5; }
 list row { background: transparent; border-bottom: 1px solid #2d3041; }
 list row:selected { background: #35304c; }
 list row:hover { background: #292c3c; }
+/* Popup windows have their own CSS root: window#alol selectors cannot reach them. */
+menu, .menu, .context-menu, popover, popover.background, window.popup {
+    background: #1c1e2a; color: #ebedf5; border: 1px solid #555b77;
+}
+menuitem { background: transparent; color: #ebedf5; padding: 8px 12px; }
+menuitem label, menuitem cellview, combobox cellview { color: inherit; }
+menuitem:hover, menuitem:selected, menuitem:focus { background: #544475; color: #ffffff; }
+menuitem:disabled { color: #858a9f; }
+menu arrow { color: #bcacff; background: #292c3c; min-height: 16px; }
+combobox arrow, expander arrow { color: #bcacff; }
+expander > title { color: #c7cbd9; padding: 8px 0; }
+expander > title:hover { color: #ffffff; }
+headerbar, .titlebar { background: #1c1e2a; color: #ebedf5; border-color: #383c50; }
+headerbar .title, .titlebar .title { font-size: 14px; font-weight: 600; color: #ebedf5; }
+headerbar .subtitle, .titlebar .subtitle { color: #b8bcce; }
+button.titlebutton { padding: 4px; min-height: 24px; min-width: 24px; }
+dialog, messagedialog, filechooser, filechooser .view, treeview.view {
+    background: #1c1e2a; color: #ebedf5;
+}
+treeview.view:selected, treeview.view:selected:focus { background: #544475; color: #ffffff; }
+treeview header button { background: #292c3c; color: #ebedf5; }
+tooltip, tooltip.background { background: #292c3c; color: #ebedf5; border: 1px solid #555b77; }
+scrollbar { background: #171923; }
+scrollbar slider { background: #555b77; border-radius: 8px; min-width: 8px; min-height: 8px; }
+scrollbar slider:hover { background: #8580ab; }
 "#;
 
 pub fn run() -> Result<()> {
@@ -1254,6 +1424,13 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         if gtk_init_check(ptr::null_mut(), ptr::null_mut()) == 0 {
             return Err("Нет графической сессии. Используйте alol --help для CLI.".into());
         }
+        // Prefer the theme's dark variants for GTK widgets not customized by ALOL.
+        g_object_set(
+            gtk_settings_get_default(),
+            c"gtk-application-prefer-dark-theme".as_ptr(),
+            1 as c_int,
+            ptr::null::<c_char>(),
+        );
         let provider = gtk_css_provider_new();
         gtk_css_provider_load_from_data(provider, c(CSS).as_ptr(), -1, ptr::null_mut());
         gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), provider, 600);
@@ -1275,12 +1452,16 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         let notebook = gtk_notebook_new();
         let tab_sizes = gtk_size_group_new(1);
         pack(outer, notebook, true);
-        let home = box_new(true, 16);
+        let home = box_new(true, 12);
         gtk_container_set_border_width(home, 12);
-        let card = box_new(true, 16);
+        let card = box_new(true, 10);
         style(card, "card");
         pack(card, label("ARIZONA ROLE PLAY", "caption"), false);
-        pack(card, label("Твой вход в игру.\nНа Linux.", "title"), false);
+        pack(
+            card,
+            label("Твой вход в игру. На Linux.", "alol-title"),
+            false,
+        );
         let detail = label("", "body");
         pack(card, detail, false);
         let runtime = label("", "runtime");
@@ -1373,7 +1554,18 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
                 page: 0,
                 error: None,
             }),
+            update_label: label(&format!("ALOL {}", env!("CARGO_PKG_VERSION")), "caption"),
+            update_button: ptr::null_mut(),
+            update_receiver: None,
+            update_release: None,
+            update_installed: false,
+            executable: std::env::current_exe().map_err(|e| e.to_string())?,
         });
+        let update_column = box_new(true, 4);
+        pack(update_column, app.update_label, false);
+        app.update_button =
+            app.button(update_column, "Проверить обновления", Action::Update, false);
+        pack(header, update_column, false);
         let player_controls = app.build_player_controls()?;
         pack(home, player_controls, false);
         let play_row = action_row();
@@ -1466,7 +1658,11 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         gtk_container_add(mods_scroller, mods_page);
         notebook_page(notebook, mods_scroller, "Моды", tab_sizes);
         notebook_page(notebook, log_page, "Журнал", tab_sizes);
-        pack(settings_page, label("Настройки Arizona", "title"), false);
+        pack(
+            settings_page,
+            label("Настройки Arizona", "alol-title"),
+            false,
+        );
         pack(settings_page, label("Память игры", "field-label"), false);
         app.game_memory = gtk_combo_box_text_new();
         for memory in [1024, 2048, 3072, 4096] {
@@ -1630,6 +1826,9 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         };
         if std::env::args().any(|a| a == "--smoke-test") {
             g_timeout_add(1400, Some(smoke_quit), ptr::null_mut());
+        }
+        if app.capture.is_none() && !std::env::args().any(|a| a == "--smoke-test") {
+            app.check_updates(false);
         }
         gtk_main();
         g_source_remove(timer);

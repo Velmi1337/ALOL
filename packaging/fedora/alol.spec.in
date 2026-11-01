@@ -28,6 +28,7 @@ Requires:       cairo
 Requires:       libarchive
 Requires:       curl
 Requires:       coreutils
+Requires:       polkit
 Requires:       wine
 Requires:       winetricks
 Requires:       glibc-langpack-ru
@@ -56,6 +57,7 @@ desktop-file-validate assets/alol.desktop
 PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/mods_integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/game_integration.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/update_integration.py
 
 %install
 install -Dm755 target/release/alol %{buildroot}%{_bindir}/alol

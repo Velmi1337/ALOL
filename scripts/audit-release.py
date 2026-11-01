@@ -104,6 +104,14 @@ def main():
     if args.platform == "fedora":
         artifacts.append(audit_fedora(args.directory, version))
     else:
+        binary = args.directory / f"alol-{version}-linux-x86_64"
+        data = binary.read_bytes()
+        if data[:6] != b"\x7fELF\x02\x01" or data[18:20] != b"\x3e\x00":
+            raise ValueError("Standalone executable is not ELF x86_64")
+        audit_bytes(binary.name, data)
+        if subprocess.check_output([str(binary.resolve()), "--version"], text=True).strip() != f"ALOL {version}":
+            raise ValueError("Standalone executable has the wrong version")
+        artifacts.append(binary)
         packages = sorted(args.directory.glob(f"alol-{version}-*-x86_64.pkg.tar.zst"))
         if len(packages) != 1:
             raise ValueError("Expected one x86_64 pacman package")

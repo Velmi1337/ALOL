@@ -13,7 +13,7 @@
 Скачайте `.pkg.tar.zst` и установите через pacman:
 
 ```sh
-sudo pacman -U ./alol-0.5.3-1-x86_64.pkg.tar.zst
+sudo pacman -U ./alol-0.5.4-1-x86_64.pkg.tar.zst
 alol
 ```
 
@@ -56,7 +56,7 @@ cd ALOL
 [GitHub Releases](https://github.com/Velmi1337/ALOL/releases) скачайте RPM:
 
 ```sh
-sudo dnf install ./alol-0.5.3-1.fc44.x86_64.rpm
+sudo dnf install ./alol-0.5.4-1.fc44.x86_64.rpm
 alol
 ```
 

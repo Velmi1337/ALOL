@@ -276,7 +276,7 @@ fn files(root: &Path) -> Result<Vec<PathBuf>> {
     }
     Ok(out)
 }
-fn hash(p: &Path, algorithm: &str) -> Result<String> {
+pub(crate) fn hash(p: &Path, algorithm: &str) -> Result<String> {
     let (tool, len) = match algorithm {
         "md5" => ("md5sum", 32),
         "sha256" => ("sha256sum", 64),
@@ -292,6 +292,9 @@ fn hash(p: &Path, algorithm: &str) -> Result<String> {
     Ok(h.to_ascii_lowercase())
 }
 pub(crate) fn fetch(url: &str, out: &Path, limit: u64) -> Result<()> {
+    fetch_with_timeout(url, out, limit, 180)
+}
+pub(crate) fn fetch_with_timeout(url: &str, out: &Path, limit: u64, seconds: u32) -> Result<()> {
     if !url.starts_with("https://") {
         return Err("Адрес загрузки должен использовать HTTPS".into());
     }
@@ -305,7 +308,7 @@ pub(crate) fn fetch(url: &str, out: &Path, limit: u64) -> Result<()> {
             "--connect-timeout",
             "8",
             "--max-time",
-            "180",
+            &seconds.to_string(),
             "--proto",
             "=https",
             "--proto-redir",

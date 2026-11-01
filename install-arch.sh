@@ -46,6 +46,10 @@ fi
 for alol_package in "${alol_packages[@]}"; do
     python3 "$alol_root/scripts/sanitize-package.py" "$alol_package"
 done
+alol_binary_dir=$(mktemp -d "$alol_build/standalone.XXXXXXXX")
+bsdtar -xOf "${alol_packages[0]}" usr/bin/alol > "$alol_binary_dir/alol"
+chmod 755 "$alol_binary_dir/alol"
+python3 "$alol_root/scripts/package-binary.py" --binary "$alol_binary_dir/alol"
 PYTHONDONTWRITEBYTECODE=1 python3 "$alol_root/scripts/audit-release.py"
 if [[ $alol_mode == install ]]; then
     sudo pacman -U --needed "${alol_packages[@]}"
