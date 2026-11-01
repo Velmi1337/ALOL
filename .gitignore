@@ -1,4 +1,5 @@
 /target/
+/.dev-data/
 /dist/
 /backups/
 /prefixes/

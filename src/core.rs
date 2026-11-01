@@ -256,7 +256,7 @@ impl Settings {
             }
             let mut c = Command::new("umu-run");
             c.env("PROTONPATH", &self.proton)
-                .env("GAMEID", "umu-default")
+                .env("GAMEID", crate::desktop::arizona_game_id())
                 .env("STORE", "none");
             // Never run an arbitrary inherited Proton verb such as destroyprefix.
             c.env("PROTON_VERB", "waitforexitandrun");
@@ -673,6 +673,11 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
         return Err(format!("Неизвестная команда: {action}. См. alol --help"));
     }
     let s = Settings::load()?;
+    if matches!(action, "launch" | "play")
+        && let Err(error) = crate::desktop::integrate_arizona()
+    {
+        eprintln!("Иконка окна Arizona: {error}");
+    }
     if action == "doctor" {
         println!("{}", doctor(&s));
         return Ok(());

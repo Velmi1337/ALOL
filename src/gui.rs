@@ -1,5 +1,5 @@
 //! Small GTK 3 ABI surface. Widgets and signal data live on GTK's main thread.
-//! No webview, background polling loop, Cargo dependencies, or bundled toolkit.
+//! Native widgets, no webview, Cargo dependencies, or bundled toolkit.
 use crate::core::{self, Result, Settings};
 use crate::desktop;
 use crate::game::{self, PlayerProfile, Server};
@@ -43,6 +43,9 @@ unsafe extern "C" {
     fn gtk_widget_destroy(widget: W);
     fn gtk_widget_set_name(widget: W, name: *const c_char);
     fn gtk_widget_set_sensitive(widget: W, sensitive: c_int);
+    fn gtk_widget_set_visible(widget: W, visible: c_int);
+    fn gtk_widget_set_no_show_all(widget: W, no_show: c_int);
+    fn gtk_widget_grab_focus(widget: W);
     fn gtk_widget_set_tooltip_text(widget: W, text: *const c_char);
     fn gtk_widget_set_size_request(widget: W, width: c_int, height: c_int);
     fn gtk_widget_set_hexpand(widget: W, expand: c_int);
@@ -60,6 +63,7 @@ unsafe extern "C" {
     fn gtk_label_set_xalign(label: W, align: f32);
     fn gtk_label_set_line_wrap(label: W, wrap: c_int);
     fn gtk_label_set_max_width_chars(label: W, width: c_int);
+    fn gtk_image_new_from_pixbuf(pixbuf: W) -> W;
     fn gtk_button_new_with_label(label: *const c_char) -> W;
     fn gtk_button_set_label(button: W, label: *const c_char);
     fn gtk_entry_new() -> W;
@@ -126,6 +130,8 @@ unsafe extern "C" {
 #[link(name = "gdk-3")]
 unsafe extern "C" {
     fn gdk_screen_get_default() -> W;
+    fn gdk_set_program_class(class: *const c_char);
+    fn gdk_atom_intern_static_string(name: *const c_char) -> W;
     fn gdk_display_get_default() -> W;
     fn gdk_display_get_primary_monitor(display: W) -> W;
     fn gdk_display_get_monitor(display: W, index: c_int) -> W;
@@ -145,6 +151,12 @@ unsafe extern "C" {
     fn gdk_pixbuf_loader_write(loader: W, bytes: *const u8, count: usize, error: *mut W) -> c_int;
     fn gdk_pixbuf_loader_close(loader: W, error: *mut W) -> c_int;
     fn gdk_pixbuf_loader_get_pixbuf(loader: W) -> W;
+    fn gdk_pixbuf_scale_simple(pixbuf: W, width: c_int, height: c_int, interpolation: c_int) -> W;
+}
+#[link(name = "gtk-3")]
+unsafe extern "C" {
+    fn gtk_clipboard_get(selection: W) -> W;
+    fn gtk_clipboard_set_text(clipboard: W, text: *const c_char, length: c_int);
 }
 #[link(name = "cairo")]
 unsafe extern "C" {
@@ -212,6 +224,28 @@ fn pack(container: W, child: W, expand: bool) {
 fn box_new(vertical: bool, spacing: i32) -> W {
     unsafe { gtk_box_new(vertical.into(), spacing) }
 }
+fn card(parent: W, title: &str, description: &str) -> W {
+    let body = box_new(true, 10);
+    style(body, "section-card");
+    if !title.is_empty() {
+        pack(body, label(title, "section-title"), false);
+    }
+    if !description.is_empty() {
+        pack(body, label(description, "caption"), false);
+    }
+    pack(parent, body, false);
+    body
+}
+fn disclosure(parent: W, title: &str) -> (W, W) {
+    unsafe {
+        let expander = gtk_expander_new(c(title).as_ptr());
+        let body = box_new(true, 10);
+        gtk_expander_set_expanded(expander, 0);
+        gtk_container_add(expander, body);
+        pack(parent, expander, false);
+        (expander, body)
+    }
+}
 /// Equal columns for action buttons, without stretching input fields or labels.
 fn action_row() -> W {
     let row = box_new(false, 10);
@@ -262,6 +296,7 @@ fn check(parent: W, text: &str, active: bool) -> W {
     unsafe {
         let w = gtk_check_button_new_with_label(c(text).as_ptr());
         gtk_toggle_button_set_active(w, active.into());
+        gtk_label_set_line_wrap(gtk_bin_get_child(w), 1);
         pack(parent, w, false);
         w
     }
@@ -288,6 +323,10 @@ enum Action {
     PlayerChanged,
     Update,
     UpdatePreferences,
+    SettingsChanged,
+    Help,
+    CopyLog,
+    LogFolder,
 }
 struct Signal {
     app: *mut App,
@@ -316,8 +355,15 @@ struct App {
     notebook: W,
     status: W,
     runtime: W,
+    hero_title: W,
+    hero: W,
+    hero_step: W,
+    help_expander: W,
+    settings_hint: W,
     detail: W,
     play: W,
+    update_game: W,
+    game_folder: W,
     spinner: W,
     stop: W,
     settings_page: W,
@@ -489,6 +535,10 @@ impl App {
         }
         .save()?;
         self.persist_player(true)?;
+        set_label(
+            self.settings_hint,
+            "Настройки сохранены. Они применятся при следующем запуске игры.",
+        );
         self.refresh();
         Ok(())
     }
@@ -497,6 +547,30 @@ impl App {
         let s = &self.settings;
         let installed = s.find_executable();
         let game_ready = game::game_executable(s).is_ok();
+        unsafe {
+            gtk_widget_set_visible(self.hero, (!game_ready).into());
+            gtk_widget_set_visible(self.player_controls, game_ready.into());
+        }
+        set_label(
+            self.hero_title,
+            if game_ready {
+                "Можно играть"
+            } else if installed.is_some() {
+                "Осталось скачать игру"
+            } else {
+                "Начнём с установки"
+            },
+        );
+        set_label(
+            self.hero_step,
+            if game_ready {
+                "ARIZONA ROLE PLAY"
+            } else if installed.is_some() {
+                "ШАГ 2 ИЗ 3 · ФАЙЛЫ ИГРЫ"
+            } else {
+                "ШАГ 1 ИЗ 3 · УСТАНОВКА"
+            },
+        );
         let prepared = s.prefix_ready();
         let runtime_name = if s.runner == "wine" {
             s.wine.clone()
@@ -524,24 +598,24 @@ impl App {
         set_label(
             self.detail,
             if game_ready {
-                "Выбери сервер и ник. ALOL запускает игру напрямую и сохраняет твой выбор."
+                "Выберите сервер и никнейм — и возвращайтесь в Arizona."
             } else if installed.is_some() {
-                "Сначала скачайте файлы игры через «Обновить игру». Затем подключайтесь прямо из ALOL."
+                "Откроем Arizona для загрузки файлов. После загрузки играйте прямо отсюда."
             } else if prepared {
-                "Окружение готово. Установите Arizona из выбранного .exe."
+                "Всё подготовлено. Выберите установщик Arizona — остальное сделаем за вас."
             } else {
-                "Начните с установки: ALOL подготовит Proton и запустит установщик Arizona."
+                "Выберите установщик Arizona. ALOL сам подготовит окружение, шрифты и библиотеки."
             },
         );
         unsafe {
             gtk_button_set_label(
                 self.play,
                 c(if game_ready {
-                    "Играть  →"
+                    "Играть"
                 } else if installed.is_some() {
-                    "Скачать игру  →"
+                    "Скачать игру"
                 } else {
-                    "Установить Arizona  →"
+                    "Установить Arizona"
                 })
                 .as_ptr(),
             );
@@ -549,13 +623,30 @@ impl App {
         if self.child.is_none() {
             set_label(
                 self.status,
-                if installed.is_some() {
+                if game_ready {
                     "Готов к запуску"
+                } else if installed.is_some() {
+                    "Следующий шаг — скачать файлы игры"
                 } else if prepared {
                     "Можно установить Arizona"
                 } else {
                     "Требуется установка"
                 },
+            );
+        }
+        self.refresh_actions();
+    }
+
+    fn refresh_actions(&self) {
+        let idle = self.child.is_none() && !self.update_installed;
+        unsafe {
+            gtk_widget_set_sensitive(
+                self.update_game,
+                (idle && self.settings.find_executable().is_some()).into(),
+            );
+            gtk_widget_set_sensitive(
+                self.game_folder,
+                (idle && self.settings.prefix_ready()).into(),
             );
         }
     }
@@ -617,6 +708,7 @@ impl App {
             gtk_widget_set_sensitive(self.player_controls, 0);
             // Do not interrupt a privileged package transaction midway through installation.
             gtk_widget_set_sensitive(self.stop, (action != "self-update").into());
+            gtk_widget_set_visible(self.stop, 1);
             gtk_spinner_start(self.spinner);
             if action == "doctor" {
                 gtk_notebook_set_current_page(self.notebook, 3);
@@ -630,6 +722,29 @@ impl App {
             return Ok(());
         }
         match action {
+            Action::SettingsChanged => set_label(
+                self.settings_hint,
+                "Есть изменения. Нажмите «Сохранить настройки».",
+            ),
+            Action::Help => unsafe {
+                gtk_expander_set_expanded(self.help_expander, 1);
+                gtk_notebook_set_current_page(self.notebook, 1);
+                gtk_widget_grab_focus(self.help_expander);
+            },
+            Action::CopyLog => unsafe {
+                let clipboard =
+                    gtk_clipboard_get(gdk_atom_intern_static_string(c"CLIPBOARD".as_ptr()));
+                gtk_clipboard_set_text(clipboard, c(&core::tail_log()).as_ptr(), -1);
+                set_label(self.status, "Журнал скопирован");
+            },
+            Action::LogFolder => {
+                let folder = core::log_file().parent().unwrap().to_path_buf();
+                std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+                Command::new("xdg-open")
+                    .arg(folder)
+                    .spawn()
+                    .map_err(|e| e.to_string())?;
+            }
             Action::UpdatePreferences => {
                 let current = self.collect()?;
                 let mut saved = Settings::load()?;
@@ -843,7 +958,13 @@ impl App {
                 )
             })
             .unwrap_or_else(|| "Выберите сервер или обновите список.".into());
-        set_label(self.player_hint, &text);
+        unsafe {
+            gtk_widget_set_tooltip_text(self.player_hint, c(&text).as_ptr());
+        }
+        set_label(
+            self.player_hint,
+            "Никнейм сохраняется автоматически для каждого сервера.",
+        );
     }
 
     fn persist_player(&mut self, force: bool) -> Result<()> {
@@ -885,9 +1006,11 @@ impl App {
     }
 
     fn build_player_controls(&mut self) -> Result<W> {
-        let controls = box_new(true, 8);
+        let controls = box_new(true, 6);
         self.player_controls = controls;
-        pack(controls, label("СЕРВЕР И ИГРОК", "field-label"), false);
+        style(controls, "section-card");
+        pack(controls, label("Ваш персонаж", "section-title"), false);
+        pack(controls, label("Сервер", "field-label"), false);
         let row = box_new(false, 10);
         self.server_combo = unsafe { gtk_combo_box_text_new() };
         pack(row, self.server_combo, true);
@@ -899,7 +1022,7 @@ impl App {
         );
         pack(controls, row, false);
         let row = box_new(false, 10);
-        pack(row, label("Никнейм", "field-label"), false);
+        pack(controls, label("Никнейм в игре", "field-label"), false);
         self.nickname_entry = entry(&self.player.nickname);
         unsafe {
             gtk_entry_set_placeholder_text(self.nickname_entry, c"Nick_Name".as_ptr());
@@ -909,6 +1032,7 @@ impl App {
         self.player_hint = label("", "caption");
         pack(controls, self.player_hint, false);
         self.reload_server_choices()?;
+        self.connect_action(self.nickname_entry, "activate", Action::Play);
         // Combo changes are handled synchronously so a nickname typed immediately
         // after choosing another server cannot overwrite the previous server's nick.
         let mut signal = SignalHolder(Box::new(Signal {
@@ -935,24 +1059,26 @@ impl App {
 
     fn build_mods(&mut self) -> W {
         unsafe {
-            let page = box_new(true, 10);
-            gtk_container_set_border_width(page, 12);
+            let page = box_new(true, 14);
+            gtk_container_set_border_width(page, 4);
             self.mods_page = page;
-            pack(page, label("Моды Arizona", "alol-title"), false);
+            pack(page, label("Моды", "page-title"), false);
             pack(
                 page,
                 label(
-                    "Официальный каталог Arizona и ваши скачанные моды. Перед установкой закройте игру и официальный лаунчер.",
+                    "Настройте игру под себя. Перед изменением модов закройте игру и Arizona.",
                     "caption",
                 ),
                 false,
             );
-            let search_row = box_new(false, 10);
-            self.mod_search = entry("");
-            gtk_entry_set_placeholder_text(
-                self.mod_search,
-                c"Поиск по названию и описанию".as_ptr(),
+            let catalog = card(
+                page,
+                "Каталог Arizona",
+                "Выберите мод из списка, чтобы установить его с резервной копией файлов.",
             );
+            let search_row = box_new(false, 8);
+            self.mod_search = entry("");
+            gtk_entry_set_placeholder_text(self.mod_search, c"Название или описание мода".as_ptr());
             pack(search_row, self.mod_search, true);
             self.button(search_row, "Найти", Action::ModFilter, false);
             self.button(
@@ -961,36 +1087,53 @@ impl App {
                 Action::Work("mods-refresh"),
                 false,
             );
-            pack(page, search_row, false);
+            self.connect_action(self.mod_search, "activate", Action::ModFilter);
+            pack(catalog, search_row, false);
             self.mod_count = label(
-                "Нажмите «Обновить каталог», чтобы получить моды Arizona.",
+                "Обновите каталог, чтобы посмотреть доступные моды.",
                 "caption",
             );
-            pack(page, self.mod_count, false);
+            pack(catalog, self.mod_count, false);
             self.mod_list = gtk_list_box_new();
             let scroller = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
             gtk_scrolled_window_set_policy(scroller, 2, 1);
-            gtk_widget_set_size_request(scroller, -1, 160);
+            gtk_widget_set_size_request(scroller, -1, 155);
             gtk_container_add(scroller, self.mod_list);
-            pack(page, scroller, true);
+            pack(catalog, scroller, true);
             self.button(
-                page,
-                "Установить выбранный официальный мод",
+                catalog,
+                "Установить выбранный мод",
                 Action::ModInstall,
                 true,
             );
-            pack(page, gtk_separator_new(0), false);
-            pack(page, label("Добавить свой мод", "field-label"), false);
+            let installed = card(
+                page,
+                "Мои моды",
+                "Моды, которыми управляет ALOL. Отключение восстанавливает исходные файлы.",
+            );
+            self.installed_combo = gtk_combo_box_text_new();
+            pack(installed, self.installed_combo, false);
+            let row = action_row();
+            for (name, op) in [
+                ("Включить", "mods-enable"),
+                ("Отключить", "mods-disable"),
+                ("Удалить", "mods-remove"),
+            ] {
+                self.button(row, name, Action::ModManage(op), false);
+            }
+            pack(installed, row, false);
+            let local = card(page, "Свой мод", "");
+            let (_, import) = disclosure(local, "Добавить файл или архив");
             let row = box_new(false, 10);
             self.mod_file = entry("");
             gtk_entry_set_placeholder_text(self.mod_file, c"ZIP, RAR, 7z, ASI, CS, Lua…".as_ptr());
             pack(row, self.mod_file, true);
-            self.button(row, "Файл…", Action::ModFile, false);
-            pack(page, row, false);
+            self.button(row, "Выбрать файл", Action::ModFile, false);
+            pack(import, row, false);
             let row = box_new(false, 10);
             self.mod_target = gtk_combo_box_text_new();
             for text in [
-                "Куда: автоматически",
+                "Расположение: автоматически",
                 "Корень игры",
                 "Mod Loader",
                 "CLEO",
@@ -1001,35 +1144,11 @@ impl App {
             gtk_combo_box_set_active(self.mod_target, 0);
             pack(row, self.mod_target, true);
             self.button(row, "Добавить мод", Action::ModImport, false);
-            pack(page, row, false);
+            pack(import, row, false);
             pack(
-                page,
+                import,
                 label(
-                    "Для Lua нужен MoonLoader; для CS — CLEO. Структура готовых архивов сохраняется.",
-                    "caption",
-                ),
-                false,
-            );
-            pack(
-                page,
-                label("Установленные через ALOL", "field-label"),
-                false,
-            );
-            self.installed_combo = gtk_combo_box_text_new();
-            pack(page, self.installed_combo, false);
-            let row = action_row();
-            for (name, op) in [
-                ("Включить", "mods-enable"),
-                ("Отключить", "mods-disable"),
-                ("Удалить", "mods-remove"),
-            ] {
-                self.button(row, name, Action::ModManage(op), false);
-            }
-            pack(page, row, false);
-            pack(
-                page,
-                label(
-                    "Заменённые файлы сохраняются в резервных копиях. При отключении мода ALOL восстанавливает их.",
+                    "Для Lua нужен MoonLoader, для CS — CLEO. Структура архива сохраняется.",
                     "caption",
                 ),
                 false,
@@ -1226,11 +1345,13 @@ impl App {
                             (!self.update_installed).into(),
                         );
                         gtk_widget_set_sensitive(self.stop, 0);
+                        gtk_widget_set_visible(self.stop, 0);
                         gtk_spinner_stop(self.spinner);
                         if !status.success() && !stopped {
                             gtk_notebook_set_current_page(self.notebook, 3);
                         }
                     }
+                    self.refresh_actions();
                 }
                 Err(e) => set_label(self.status, &format!("Ошибка ожидания: {e}")),
                 Ok(None) => (),
@@ -1566,6 +1687,39 @@ fn window_icon(window: W) {
     }
 }
 
+fn logo(size: c_int) -> W {
+    unsafe {
+        let loader = gdk_pixbuf_loader_new_with_type(c"png".as_ptr(), ptr::null_mut());
+        if loader.is_null() {
+            return label("A", "brand");
+        }
+        let mut result = ptr::null_mut();
+        if gdk_pixbuf_loader_write(
+            loader,
+            desktop::ICON.as_ptr(),
+            desktop::ICON.len(),
+            ptr::null_mut(),
+        ) != 0
+            && gdk_pixbuf_loader_close(loader, ptr::null_mut()) != 0
+        {
+            let pixbuf = gdk_pixbuf_loader_get_pixbuf(loader);
+            if !pixbuf.is_null() {
+                let scaled = gdk_pixbuf_scale_simple(pixbuf, size, size, 2);
+                if !scaled.is_null() {
+                    result = gtk_image_new_from_pixbuf(scaled);
+                    g_object_unref(scaled);
+                }
+            }
+        }
+        g_object_unref(loader);
+        if result.is_null() {
+            label("A", "brand")
+        } else {
+            result
+        }
+    }
+}
+
 unsafe extern "C" fn clicked(_: W, data: W) {
     // SAFETY: SignalHolder and App outlive GTK's main loop; callbacks run there only.
     let signal = unsafe { &*(data as *const Signal) };
@@ -1667,39 +1821,48 @@ const CSS: &str = r#"
 @define-color theme_selected_bg_color #544475;
 @define-color theme_selected_fg_color #ffffff;
 @define-color insensitive_fg_color #858a9f;
-window { background: #12131a; color: #ebedf5; }
+window { background: #11141c; color: #edf0f7; }
 * { font-family: Sans; font-size: 14px; }
-.brand { font-size: 34px; font-weight: 900; letter-spacing: 3px; color: #bcacff; }
-.caption { color: #9a9eaf; font-size: 12px; }
-.alol-title { font-size: 30px; font-weight: 800; }
-.body { color: #b2b6c9; }
-.runtime { color: #c8bbff; font-size: 13px; }
-.field-label { font-size: 12px; color: #b8bcce; margin-top: 6px; }
-.card { background: #1c1e2a; border-radius: 16px; padding: 18px; }
-button { background: #292c3c; color: #e4e6f1; border: 1px solid #3a3e54; border-radius: 10px; min-height: 20px; padding: 11px 16px; box-shadow: none; text-shadow: none; transition: background-color 120ms ease, border-color 120ms ease; }
-button:hover { background: #35394d; border-color: #646281; }
-button:active { background: #232638; }
-button:focus { border-color: #bcacff; box-shadow: 0 0 0 2px alpha(#bcacff, 0.18); }
-button.primary { background: #aa91ff; color: #171223; border-color: #aa91ff; font-weight: 700; }
-button.primary:hover { background: #c0adff; border-color: #c0adff; }
-button.primary:active { background: #9b80ef; }
+.brand { color: #ede8ff; font-size: 25px; font-weight: 800; }
+.dev-badge { color: #c7b6ff; background: #302a45; border: 1px solid #514569; border-radius: 7px; padding: 4px 7px; font-size: 10px; font-weight: 700; }
+.caption { color: #a8b0c3; font-size: 12px; }
+.body { color: #c6ccdb; font-size: 14px; }
+.runtime { color: #b8c7e0; font-size: 11px; margin-top: 4px; }
+.eyebrow { color: #c6b5ff; font-size: 11px; font-weight: 700; }
+.alol-title { color: #f6f3ff; font-size: 29px; font-weight: 800; }
+.page-title { color: #f0f2fa; font-size: 25px; font-weight: 700; margin-bottom: 2px; }
+.section-title { color: #edf0f7; font-size: 17px; font-weight: 700; }
+.hero { background-image: linear-gradient(to right, #302a46, #202838); border: 1px solid #48405f; border-radius: 16px; padding: 22px; }
+.section-card { background: #1a1e29; border: 1px solid #30374a; border-radius: 14px; padding: 18px; }
+.help-content { padding: 10px 0; }
+.field-label { font-size: 12px; font-weight: 600; color: #bec6d8; margin-top: 4px; }
+button { background: #272d3d; color: #e7ecf7; border: 1px solid #424b63; border-radius: 10px; min-height: 18px; padding: 9px 14px; box-shadow: none; text-shadow: none; transition: background-color 120ms ease, border-color 120ms ease; }
+button:hover { background: #343d53; border-color: #777198; }
+button:active { background: #202537; }
+button:focus { border-color: #bca6ff; box-shadow: 0 0 0 2px alpha(#bca6ff, 0.17); }
+button.primary { background: #b59aff; color: #1a1329; border-color: #b59aff; font-weight: 700; }
+button.primary:hover { background: #c8b3ff; border-color: #c8b3ff; }
+button.primary:active { background: #a88aed; }
+button.play-button { font-size: 17px; min-height: 30px; padding: 12px 20px; }
 button:disabled { opacity: 0.45; }
-entry, combobox entry { background: #1c1e2a; color: #eceef6; border: 1px solid #383c50; border-radius: 10px; min-height: 20px; padding: 11px 12px; }
-entry:focus { border-color: #aa91ff; }
+entry, combobox entry { background: #141924; color: #edf0f7; border: 1px solid #424b63; border-radius: 10px; min-height: 18px; padding: 10px 12px; }
+entry:focus { border-color: #b59aff; }
 notebook, notebook > stack { background: transparent; border: none; }
-notebook > header { background: transparent; border: none; }
-notebook > header tabs tab { background: transparent; color: #a0a5b9; border: none; border-bottom: 2px solid transparent; padding: 12px 18px; }
-notebook > header tabs tab:checked { color: #d1c4ff; border-bottom: 2px solid #aa91ff; }
-textview, textview text { background: #171923; color: #bfc8dc; font-family: monospace; font-size: 12px; }
-checkbutton { color: #c7cbd9; padding: 4px 0; }
-check { background: #303448; border: 1px solid #555b77; }
-check:checked { background: #aa91ff; color: #171223; }
-separator { background: #2d3041; min-height: 1px; }
+notebook > header { background: #1a1e29; border: 1px solid #30374a; border-radius: 12px; padding: 4px; margin-bottom: 10px; }
+notebook > header tabs tab { background: transparent; color: #aeb7cb; border: 1px solid transparent; border-radius: 8px; padding: 9px 16px; }
+notebook > header tabs tab:checked { box-shadow: none; background: #343047; color: #eee6ff; border-color: #59506f; }
+textview, textview text { background: #141924; color: #c3cfe4; font-family: monospace; font-size: 12px; }
+textview { padding: 12px; border-radius: 12px; }
+checkbutton { color: #d0d7e6; padding: 5px 0; }
+check { background: #2a3143; border: 1px solid #67718c; border-radius: 4px; }
+check:checked { background: #b59aff; color: #1a1329; border-color: #b59aff; }
+separator { background: #30374a; min-height: 1px; }
 scrolledwindow { border: none; }
-list { background: #1c1e2a; color: #ebedf5; }
-list row { background: transparent; border-bottom: 1px solid #2d3041; }
-list row:selected { background: #35304c; }
-list row:hover { background: #292c3c; }
+list { background: #171c27; color: #edf0f7; border-radius: 10px; }
+list row { background: transparent; border-bottom: 1px solid #30374a; }
+list row:selected { background: #37304f; }
+list row:hover { background: #293146; }
+.save-bar { background: #1a1e29; border: 1px solid #30374a; border-radius: 12px; padding: 12px; }
 /* Popup windows have their own CSS root: window#alol selectors cannot reach them. */
 menu, .menu, .context-menu, popover, popover.background, window.popup {
     background: #1c1e2a; color: #ebedf5; border: 1px solid #555b77;
@@ -1736,7 +1899,8 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
     let player = PlayerProfile::load(&settings)?;
     let game_options = GameOptions::load(&settings)?;
     unsafe {
-        g_set_prgname(c"alol".as_ptr());
+        g_set_prgname(c(desktop::application_id()).as_ptr());
+        gdk_set_program_class(c(desktop::application_id()).as_ptr());
         g_set_application_name(c"ALOL".as_ptr());
         if gtk_init_check(ptr::null_mut(), ptr::null_mut()) == 0 {
             return Err("Нет графической сессии. Используйте alol --help для CLI.".into());
@@ -1753,7 +1917,15 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), provider, 600);
         g_object_unref(provider);
         let window = gtk_window_new(0);
-        gtk_window_set_title(window, c"ALOL — Arizona Launcher On Linux".as_ptr());
+        gtk_window_set_title(
+            window,
+            c(if desktop::development_copy() {
+                "ALOL · Разработка — Arizona Launcher On Linux"
+            } else {
+                "ALOL — Arizona Launcher On Linux"
+            })
+            .as_ptr(),
+        );
         let (width, height) = fit_window_size(860, 760);
         gtk_window_set_default_size(window, width, height);
         gtk_window_set_position(window, 1);
@@ -1761,46 +1933,51 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         window_icon(window);
         if capture_output.is_none()
             && !std::env::args().any(|a| a == "--smoke-test")
-            && let Err(error) = desktop::integrate()
+            && let Err(error) = desktop::integrate().and_then(|_| desktop::integrate_arizona())
         {
             eprintln!("Интеграция с рабочим столом: {error}");
         }
-        let outer = box_new(true, 16);
-        gtk_container_set_border_width(outer, 26);
+        let outer = box_new(true, 14);
+        gtk_container_set_border_width(outer, 22);
         gtk_container_add(window, outer);
         let header = box_new(false, 18);
-        let brand = box_new(true, 1);
-        pack(brand, label("ALOL", "brand"), false);
-        pack(brand, label("ARIZONA LAUNCHER ON LINUX", "caption"), false);
+        pack(header, logo(44), false);
+        let brand = box_new(true, 2);
+        let brand_row = box_new(false, 10);
+        pack(brand_row, label("ALOL", "brand"), false);
+        if desktop::development_copy() {
+            pack(brand_row, label("РАЗРАБОТКА", "dev-badge"), false);
+        }
+        pack(brand, brand_row, false);
+        pack(brand, label("Arizona Role Play на Linux", "caption"), false);
         pack(header, brand, true);
         pack(outer, header, false);
         let notebook = gtk_notebook_new();
+        gtk_widget_set_name(notebook, c"alol-notebook".as_ptr());
         let tab_sizes = gtk_size_group_new(1);
         pack(outer, notebook, true);
         let home = box_new(true, 12);
-        gtk_container_set_border_width(home, 12);
-        let card = box_new(true, 10);
-        style(card, "card");
-        pack(card, label("ARIZONA ROLE PLAY", "caption"), false);
-        pack(
-            card,
-            label("Твой вход в игру. На Linux.", "alol-title"),
-            false,
-        );
+        gtk_container_set_border_width(home, 4);
+        let hero = box_new(true, 10);
+        style(hero, "hero");
+        let hero_step = label("ARIZONA ROLE PLAY", "eyebrow");
+        let hero_title = label("Можно играть", "alol-title");
+        pack(hero, hero_step, false);
+        pack(hero, hero_title, false);
         let detail = label("", "body");
-        pack(card, detail, false);
+        pack(hero, detail, false);
         let runtime = label("", "runtime");
-        pack(card, runtime, false);
-        pack(home, card, false);
-        let settings_page = box_new(true, 8);
-        gtk_container_set_border_width(settings_page, 12);
+
+        pack(home, hero, false);
+        let settings_page = box_new(true, 14);
+        gtk_container_set_border_width(settings_page, 4);
         let log_page = box_new(true, 10);
         gtk_container_set_border_width(log_page, 12);
-        pack(log_page, label("Журнал операций", "field-label"), false);
+        pack(log_page, label("Журнал", "page-title"), false);
         pack(
             log_page,
             label(
-                &format!("Последние 48 КБ · {}", core::log_file().display()),
+                "Здесь видно, как идёт установка и что произошло при ошибке.",
                 "caption",
             ),
             false,
@@ -1843,8 +2020,18 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             notebook,
             status,
             runtime,
+            hero_title,
+            hero,
+            hero_step,
+            help_expander: ptr::null_mut(),
+            settings_hint: label(
+                "Изменения применятся при следующем запуске игры.",
+                "caption",
+            ),
             detail,
             play: ptr::null_mut(),
+            update_game: ptr::null_mut(),
+            game_folder: ptr::null_mut(),
             spinner,
             stop: ptr::null_mut(),
             settings_page,
@@ -1894,6 +2081,11 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             update_prompt_pending: false,
             update_manual: false,
         });
+        let log_actions = action_row();
+        app.button(log_actions, "Скопировать журнал", Action::CopyLog, false);
+        app.button(log_actions, "Папка журналов", Action::LogFolder, false);
+        app.button(log_actions, "Диагностика", Action::Work("doctor"), false);
+        pack(log_page, log_actions, false);
         let update_column = box_new(true, 4);
         gtk_label_set_max_width_chars(app.update_label, 32);
         pack(update_column, app.update_label, false);
@@ -1902,22 +2094,27 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         pack(header, update_column, false);
         let player_controls = app.build_player_controls()?;
         pack(home, player_controls, false);
-        let play_row = if width < 800 {
+        let play_actions = box_new(true, 8);
+        app.play = app.button(play_actions, "Установить Arizona", Action::Play, true);
+        style(app.play, "play-button");
+        let secondary = if width < 640 {
             let row = box_new(true, 8);
             style(row, "actions");
             row
         } else {
             action_row()
         };
-        app.play = app.button(play_row, "Установить Arizona  →", Action::Play, true);
-        app.button(play_row, "Обновить игру", Action::Work("launch"), false);
-        app.button(play_row, "Папка игры", Action::Folder, false);
-        pack(home, play_row, false);
+        app.update_game = app.button(secondary, "Обновить игру", Action::Work("launch"), false);
+        app.game_folder = app.button(secondary, "Папка игры", Action::Folder, false);
+        app.button(secondary, "Помощь", Action::Help, false);
+        pack(play_actions, secondary, false);
         let maintenance = box_new(true, 10);
-        let expander = gtk_expander_new(c"Установка и обслуживание".as_ptr());
+        let expander = gtk_expander_new(c"Установка и восстановление".as_ptr());
+        app.help_expander = expander;
+        gtk_widget_set_name(expander, c"alol-help".as_ptr());
         gtk_expander_set_expanded(expander, 0);
         gtk_container_add(expander, maintenance);
-        pack(home, expander, false);
+        style(maintenance, "help-content");
         let installer_row = action_row();
         app.button(
             installer_row,
@@ -1937,7 +2134,7 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         );
         pack(
             maintenance,
-            label("УСТАНОВКА И ВОССТАНОВЛЕНИЕ", "field-label"),
+            label("Если что-то не работает", "section-title"),
             false,
         );
         let row = action_row();
@@ -1986,21 +2183,100 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         let home_scroller = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
         gtk_scrolled_window_set_policy(home_scroller, 2, 1);
         gtk_container_add(home_scroller, home);
-        notebook_page(notebook, home_scroller, "Играть", tab_sizes);
+        let home_container = box_new(true, 12);
+        pack(home_container, home_scroller, true);
+        pack(home_container, play_actions, false);
+        notebook_page(notebook, home_container, "Играть", tab_sizes);
         let settings_scroller = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
         gtk_scrolled_window_set_policy(settings_scroller, 2, 1);
         gtk_container_add(settings_scroller, settings_page);
-        notebook_page(notebook, settings_scroller, "Настройки", tab_sizes);
+        let settings_container = box_new(true, 12);
+        pack(settings_container, settings_scroller, true);
+        notebook_page(notebook, settings_container, "Настройки", tab_sizes);
         let mods_page = app.build_mods();
         let mods_scroller = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
         gtk_scrolled_window_set_policy(mods_scroller, 2, 1);
         gtk_container_add(mods_scroller, mods_page);
         notebook_page(notebook, mods_scroller, "Моды", tab_sizes);
         notebook_page(notebook, log_page, "Журнал", tab_sizes);
-        pack(settings_page, label("Настройки ALOL", "alol-title"), false);
+        pack(settings_page, label("Настройки", "page-title"), false);
         pack(
             settings_page,
-            label("Проверять обновления", "field-label"),
+            label(
+                "Всё основное — здесь. Дополнительные параметры можно раскрыть при необходимости.",
+                "caption",
+            ),
+            false,
+        );
+        let game_card = card(settings_page, "Игра", "");
+        pack(game_card, label("Память игры", "field-label"), false);
+        app.game_memory = gtk_combo_box_text_new();
+        for note in ["1 ГБ · экономно", "2 ГБ · рекомендуется", "3 ГБ", "4 ГБ"]
+        {
+            gtk_combo_box_text_append_text(app.game_memory, c(note).as_ptr());
+        }
+        gtk_combo_box_set_active(
+            app.game_memory,
+            [1024, 2048, 3072, 4096]
+                .iter()
+                .position(|m| *m == game_options.memory)
+                .unwrap_or(1) as i32,
+        );
+        pack(game_card, app.game_memory, false);
+        for option in game_options::OPTIONS
+            .iter()
+            .filter(|option| ["wideScreen", "windowed", "shitPc"].contains(&option.id))
+        {
+            let widget = check(game_card, option.label, game_options.enabled(option.id));
+            gtk_widget_set_tooltip_text(widget, c(option.tooltip).as_ptr());
+            app.game_checks.push((option.id, widget));
+        }
+        let (_, graphics) = disclosure(game_card, "Дополнительная графика и интерфейс");
+        for option in game_options::OPTIONS
+            .iter()
+            .filter(|option| !["wideScreen", "windowed", "shitPc"].contains(&option.id))
+        {
+            let widget = check(graphics, option.label, game_options.enabled(option.id));
+            gtk_widget_set_tooltip_text(widget, c(option.tooltip).as_ptr());
+            app.game_checks.push((option.id, widget));
+        }
+        let compatibility = card(
+            settings_page,
+            "Совместимость",
+            "Если всё работает, оставьте эти параметры как есть.",
+        );
+        let input_compatibility = check(
+            compatibility,
+            "Совместимый ввод клавиатуры · COSMIC / WASD",
+            settings.input_compatibility,
+        );
+        gtk_widget_set_tooltip_text(input_compatibility, c"Использует XWayland, если доступен, и отключает перехват клавиш Linux IME. Перед игрой выберите английскую раскладку. Отключите для IME или нативного Wayland.".as_ptr());
+        let launcher_compatibility = check(
+            compatibility,
+            "Совместимый запуск официального лаунчера",
+            settings.launcher_compatibility,
+        );
+        gtk_widget_set_tooltip_text(launcher_compatibility, c"Убирает конфликтующие переменные dotfiles и оверлеев только для лаунчера и установщика; использует XWayland при доступном DISPLAY.".as_ptr());
+        let disable_gpu = check(
+            compatibility,
+            "Не использовать GPU в официальном лаунчере",
+            settings.disable_gpu,
+        );
+        gtk_widget_set_tooltip_text(
+            disable_gpu,
+            c"Помогает при пустом или белом окне Arizona. На графику самой игры не влияет."
+                .as_ptr(),
+        );
+        let wined3d = check(
+            compatibility,
+            "Совместимая графика игры · OpenGL",
+            settings.wined3d,
+        );
+        gtk_widget_set_tooltip_text(wined3d, c"Попробуйте, если игра не отображается или есть проблемы с Vulkan. Может снизить производительность.".as_ptr());
+        let update_card = card(settings_page, "Обновления ALOL", "");
+        pack(
+            update_card,
+            label("Когда проверять новую версию", "field-label"),
             false,
         );
         let update_policy = gtk_combo_box_text_new();
@@ -2020,72 +2296,32 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
                 .position(|p| *p == settings.update_policy)
                 .unwrap_or(0) as i32,
         );
-        pack(settings_page, update_policy, false);
+        pack(update_card, update_policy, false);
         let update_notifications = check(
-            settings_page,
-            "Показывать окно, когда доступна новая версия",
+            update_card,
+            "Сообщать, когда доступно обновление",
             settings.update_notifications,
         );
         gtk_widget_set_name(update_notifications, c"alol-update-notifications".as_ptr());
         pack(
-            settings_page,
-            label(
-                "Настройки обновлений сохраняются сразу. Ручная проверка доступна вверху окна.",
-                "caption",
-            ),
+            update_card,
+            label("Эти два параметра сохраняются сразу.", "caption"),
             false,
         );
-        pack(settings_page, gtk_separator_new(0), false);
-        pack(
+        let advanced_card = card(
             settings_page,
-            label("Настройки Arizona", "alol-title"),
-            false,
+            "Дополнительно",
+            "Пути и параметры запуска обычно определяются автоматически.",
         );
-        pack(settings_page, label("Память игры", "field-label"), false);
-        app.game_memory = gtk_combo_box_text_new();
-        for memory in [1024, 2048, 3072, 4096] {
-            gtk_combo_box_text_append_text(app.game_memory, c(&format!("{memory} МБ")).as_ptr());
-        }
-        gtk_combo_box_set_active(
-            app.game_memory,
-            ([1024, 2048, 3072, 4096]
-                .iter()
-                .position(|m| *m == game_options.memory)
-                .unwrap_or(1)) as i32,
-        );
-        pack(settings_page, app.game_memory, false);
-        for option in game_options::OPTIONS {
-            let w = check(settings_page, option.label, game_options.enabled(option.id));
-            gtk_widget_set_tooltip_text(w, c(option.tooltip).as_ptr());
-            app.game_checks.push((option.id, w));
-        }
-        pack(
-            settings_page,
-            label(
-                "Настройки применяются при запуске игры. Нажмите «Сохранить», чтобы сохранить изменения без запуска.",
-                "caption",
-            ),
-            false,
-        );
-        pack(settings_page, gtk_separator_new(0), false);
-        pack(
-            settings_page,
-            label("Окружение запуска", "field-label"),
-            false,
-        );
+        let (_, advanced) = disclosure(advanced_card, "Окружение и пути к файлам");
+        pack(advanced, label("Запускать через", "field-label"), false);
         let runner = gtk_combo_box_text_new();
-        gtk_combo_box_text_append_text(runner, c"GE-Proton / UMU (основной вариант)".as_ptr());
-        gtk_combo_box_text_append_text(runner, c"Wine (отдельное окружение)".as_ptr());
+        gtk_combo_box_text_append_text(runner, c"Proton · рекомендуется".as_ptr());
+        gtk_combo_box_text_append_text(runner, c"Wine · отдельное окружение".as_ptr());
         gtk_combo_box_set_active(runner, if settings.runner == "wine" { 1 } else { 0 });
-        pack(settings_page, runner, false);
-        pack(
-            settings_page,
-            label(
-                "Сборка Proton · можно вписать путь к другой сборке",
-                "field-label",
-            ),
-            false,
-        );
+        pack(advanced, runner, false);
+        pack(advanced, runtime, false);
+        pack(advanced, label("Сборка Proton", "field-label"), false);
         let combo = gtk_combo_box_text_new_with_entry();
         for item in ["GE-Proton", "UMU-Proton"] {
             gtk_combo_box_text_append_text(combo, c(item).as_ptr());
@@ -2095,78 +2331,56 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         }
         let proton = gtk_bin_get_child(combo);
         gtk_entry_set_text(proton, c(&settings.proton).as_ptr());
-        pack(settings_page, combo, false);
+        pack(advanced, combo, false);
         pack(
-            settings_page,
+            advanced,
             label(
-                "Первая подготовка скачивает сборку и закрепляет её. Для обновления снова выберите GE-Proton. Обе семьи используют разные префиксы.",
+                "Сборка скачивается при первом запуске. Для её обновления снова выберите GE-Proton.",
                 "caption",
             ),
             false,
         );
-        pack(
-            settings_page,
-            label("Команда или полный путь к Wine", "field-label"),
-            false,
-        );
+        pack(advanced, label("Команда Wine", "field-label"), false);
         let wine = entry(&settings.wine);
-        pack(settings_page, wine, false);
+        pack(advanced, wine, false);
         let installer = app.file_field(
-            settings_page,
-            "Установщик Arizona",
+            advanced,
+            "Установщик Arizona · .exe",
             &settings.installer,
             false,
         );
         let executable = app.file_field(
-            settings_page,
-            "Официальный лаунчер .exe · пусто = найти автоматически",
+            advanced,
+            "Официальный лаунчер · можно оставить пустым",
             &settings.executable,
             false,
         );
-        gtk_entry_set_placeholder_text(executable, c"Автоматически после установки".as_ptr());
+        gtk_entry_set_placeholder_text(executable, c"Найти автоматически".as_ptr());
         let prefix = app.file_field(
-            settings_page,
-            "Папка окружений · подпапки proton и wine",
+            advanced,
+            "Где хранить окружения игры",
             &settings.prefix_root,
             true,
         );
-        let wined3d = check(
-            settings_page,
-            "WineD3D / OpenGL вместо DXVK (если игра не отображается)",
-            settings.wined3d,
-        );
-        let disable_gpu = check(
-            settings_page,
-            "Отключить GPU в официальном лаунчере (при пустом окне)",
-            settings.disable_gpu,
-        );
-        let launcher_compatibility = check(
-            settings_page,
-            "Совместимый запуск Arizona: XWayland и чистое окружение",
-            settings.launcher_compatibility,
-        );
-        gtk_widget_set_tooltip_text(launcher_compatibility, c"Только официальный лаунчер и установщик: убирает конфликтующие переменные dotfiles и оверлеев; использует XWayland при доступном DISPLAY. Параметры самой игры сохраняются.".as_ptr());
         let discrete_gpu = check(
-            settings_page,
-            "Второй GPU · DRI_PRIME=1 (Mesa)",
+            advanced,
+            "Использовать второй GPU · Mesa",
             settings.discrete_gpu,
         );
-        let input_compatibility = check(
-            settings_page,
-            "Совместимость клавиатуры: WASD / COSMIC / XWayland",
-            settings.input_compatibility,
+        let no_sync = check(advanced, "Отключить Esync / Fsync", settings.no_sync);
+        let debug = check(advanced, "Подробный журнал Wine / Proton", settings.debug);
+        app.button(
+            advanced,
+            "Открыть настройки Wine",
+            Action::Work("winecfg"),
+            false,
         );
-        gtk_widget_set_tooltip_text(input_compatibility, c"Запуск через XWayland, если доступен, без Linux IME. Настройки рабочего стола и привязки игры сохраняются. Перед игрой выберите английскую раскладку. Отключите для нативного Wayland или IME.".as_ptr());
-        let no_sync = check(
+        let help_card = card(
             settings_page,
-            "Совместимость: отключить Esync / Fsync",
-            settings.no_sync,
+            "Помощь",
+            "Установка, восстановление и проверка окружения без удаления игры.",
         );
-        let debug = check(
-            settings_page,
-            "Подробный журнал Wine / Proton",
-            settings.debug,
-        );
+        pack(help_card, expander, false);
         app.fields = Fields {
             runner,
             proton,
@@ -2186,13 +2400,35 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         };
         app.connect_action(update_policy, "changed", Action::UpdatePreferences);
         app.connect_action(update_notifications, "toggled", Action::UpdatePreferences);
-        let row = action_row();
-        app.button(row, "Сохранить", Action::Save, true);
-        app.button(row, "Настройки Wine", Action::Work("winecfg"), false);
-        pack(settings_page, row, false);
+        for widget in [runner, app.game_memory] {
+            app.connect_action(widget, "changed", Action::SettingsChanged);
+        }
+        for widget in [proton, wine, installer, executable, prefix] {
+            app.connect_action(widget, "changed", Action::SettingsChanged);
+        }
+        let mut toggles = vec![
+            wined3d,
+            disable_gpu,
+            launcher_compatibility,
+            input_compatibility,
+            discrete_gpu,
+            no_sync,
+            debug,
+        ];
+        toggles.extend(app.game_checks.iter().map(|(_, w)| *w));
+        for widget in toggles {
+            app.connect_action(widget, "toggled", Action::SettingsChanged);
+        }
+        let save_row = box_new(false, 12);
+        style(save_row, "save-bar");
+        gtk_label_set_max_width_chars(app.settings_hint, 48);
+        pack(save_row, app.settings_hint, true);
+        app.button(save_row, "Сохранить настройки", Action::Save, true);
+        pack(settings_container, save_row, false);
         pack(outer, gtk_separator_new(0), false);
         app.stop = app.button(footer, "Остановить", Action::Stop, false);
         gtk_widget_set_sensitive(app.stop, 0);
+        gtk_widget_set_no_show_all(app.stop, 1);
         pack(outer, footer, false);
         app.refresh();
         app.reload_mods();
@@ -2211,6 +2447,7 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         let timer = g_timeout_add(400, Some(tick), (&mut *app as *mut App).cast());
         gtk_widget_set_name(window, c"alol".as_ptr());
         gtk_widget_show_all(window);
+        app.refresh();
         if app.capture.is_some() {
             set_label(app.status, "Демонстрационный профиль · Nick_Name");
         }

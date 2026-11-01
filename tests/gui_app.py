@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import tempfile
 import time
@@ -50,6 +51,11 @@ static int has_notes(GtkWidget *w) {
     }
     return 0;
 }
+static int on_screen(GtkWidget *w, GtkWidget *main) {
+    int x, y;
+    return w && gtk_widget_get_mapped(w) && gtk_widget_translate_coordinates(w, main, 0, 0, &x, &y) &&
+        y >= 0 && y + gtk_widget_get_allocated_height(w) <= gtk_widget_get_allocated_height(main);
+}
 static gboolean inspect(gpointer unused) {
     ticks++;
     int mode = atoi(getenv("ALOL_GUI_MODE"));
@@ -76,6 +82,19 @@ static gboolean inspect(gpointer unused) {
         if (policy) gtk_combo_box_set_active(GTK_COMBO_BOX(policy), 2);
         if (notify) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(notify), FALSE);
     }
+    if ((mode == 6 || mode == 7) && ticks == 4) {
+        if (mode == 6) {
+            GtkWidget *notebook = find(main, "alol-notebook", NULL);
+            gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), 1);
+            GtkWidget *toggle = find(main, NULL, "Широкий экран");
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(toggle), FALSE);
+        } else {
+            gtk_button_clicked(GTK_BUTTON(find(main, NULL, "Помощь")));
+        }
+    }
+    if (mode == 6 && ticks == 6) {
+        gtk_button_clicked(GTK_BUTTON(find(main, NULL, "Сохранить настройки")));
+    }
     if (mode == 5 && dialog && !clicked && ticks >= 6) {
         clicked = 1;
         gtk_dialog_response(GTK_DIALOG(dialog), GTK_RESPONSE_ACCEPT);
@@ -86,12 +105,16 @@ static gboolean inspect(gpointer unused) {
     GdkPixbuf *icon = gtk_window_get_icon(GTK_WINDOW(main));
     FILE *report = fopen(getenv("ALOL_GUI_REPORT"), "w");
     if (report) {
-        fprintf(report, "{\"popup\":%d,\"unexpected\":%d,\"clicked\":%d,\"notes\":%d,\"transient\":%d,\"icon\":%d,\"identity\":%d,\"duplicate\":%d,\"width\":%d,\"height\":%d,\"retry\":%d}",
+        fprintf(report, "{\"popup\":%d,\"unexpected\":%d,\"clicked\":%d,\"notes\":%d,\"transient\":%d,\"icon\":%d,\"identity\":%d,\"duplicate\":%d,\"width\":%d,\"height\":%d,\"retry\":%d,\"save_visible\":%d,\"play_visible\":%d,\"help\":%d,\"page\":%d}",
             dialog != NULL, unexpected, clicked, dialog ? has_notes(dialog) : 0,
             dialog && gtk_window_get_transient_for(GTK_WINDOW(dialog)) == GTK_WINDOW(main),
             icon && gdk_pixbuf_get_width(icon) == 256,
-            !strcmp(g_get_prgname(), "alol"), find(main, NULL, "Установить лаунчер") != NULL,
-            width, height, dialog && find(dialog, NULL, "Проверить снова") != NULL);
+            !strcmp(g_get_prgname(), getenv("ALOL_GUI_APP_ID")), find(main, NULL, "Установить лаунчер") != NULL,
+            width, height, dialog && find(dialog, NULL, "Проверить снова") != NULL,
+            on_screen(find(main, NULL, "Сохранить настройки"), main),
+            on_screen(find(main, NULL, "Установить Arizona"), main),
+            gtk_expander_get_expanded(GTK_EXPANDER(find(main, "alol-help", NULL))),
+            gtk_notebook_get_current_page(GTK_NOTEBOOK(find(main, "alol-notebook", NULL))));
         fclose(report);
     }
     if (dialog && getenv("ALOL_GUI_SCREENSHOT")) {
@@ -127,7 +150,7 @@ class App(unittest.TestCase):
     def tearDownClass(cls):
         cls.module_dir.cleanup()
 
-    def scenario(self, mode, policy="startup", notify=True, cached=False):
+    def scenario(self, mode, policy="startup", notify=True, cached=False, standalone=False):
         with tempfile.TemporaryDirectory(prefix="alol-gui-") as directory:
             root = Path(directory)
             config = root / "config/alol/settings.conf"
@@ -149,13 +172,18 @@ class App(unittest.TestCase):
                 cache.write_text(json.dumps({"checked_at": int(time.time()), "release": release}))
             report = root / "report.json"
             env = dict(os.environ, XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
-                       XDG_CACHE_HOME=str(root / "cache"), XDG_DATA_DIRS=str(root / "system") + ":/usr/local/share:/usr/share",
+                       XDG_CACHE_HOME=str(root / "cache"), ALOL_DESKTOP_DATA_HOME=str(root / "data"),
+                       ALOL_GUI_APP_ID="alol" if standalone else "alol-dev", XDG_DATA_DIRS=str(root / "system") + ":/usr/local/share:/usr/share",
                        GTK_MODULES=str(self.module), GTK_THEME="Adwaita:dark",
                        PATH=str(tools) + os.pathsep + os.environ["PATH"], ALOL_GUI_MODE=str(mode),
                        ALOL_GUI_REPORT=str(report), ALOL_GUI_RELEASE=str(metadata), ALOL_GUI_REQUEST=str(root / "requested"))
             if os.environ.get("ALOL_GUI_PREVIEW") and mode == 0:
                 env["ALOL_GUI_SCREENSHOT"] = os.environ["ALOL_GUI_PREVIEW"]
-            result = subprocess.run([str(ROOT / "target/release/alol")], env=env,
+            executable = ROOT / "target/release/alol"
+            if standalone:
+                executable = root / "alol"
+                shutil.copy2(ROOT / "target/release/alol", executable)
+            result = subprocess.run([str(executable)], env=env,
                                     capture_output=True, text=True, timeout=8)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue(report.is_file(), result.stderr)
@@ -166,23 +194,53 @@ class App(unittest.TestCase):
             self.assertLessEqual(data["width"], 860)
             self.assertLessEqual(data["height"], 760)
             self.assertEqual(data["unexpected"], 0)
-            if mode != 3:
+            if mode not in (3, 6, 7):
                 self.assertEqual(data["popup"], 1, data)
                 self.assertEqual(data["notes"], 1)
                 self.assertEqual(data["transient"], 1)
-            self.assertEqual((root / "requested").exists(), not cached and mode != 3)
-            locations = [root / "data", Path("/usr/local/share"), Path("/usr/share")]
-            self.assertTrue(any((d / "applications/alol.desktop").is_file() for d in locations))
-            self.assertTrue(any((d / "icons/hicolor/256x256/apps/alol.png").is_file() for d in locations))
+            self.assertEqual((root / "requested").exists(), not cached and mode not in (3, 6, 7))
+            arizona_class = "steam_app_alolarizona" if standalone else "steam_app_alolarizonadev"
+            metadata = (root / "data/applications" / f"{arizona_class}.desktop").read_text()
+            self.assertIn("NoDisplay=true\n", metadata)
+            self.assertFalse((root / "data/applications/steam_app_default.desktop").exists())
+            if standalone:
+                locations = [root / "data", Path("/usr/local/share"), Path("/usr/share")]
+                self.assertTrue(any((d / "applications/alol.desktop").is_file() for d in locations))
+                self.assertTrue(any((d / "icons/hicolor/256x256/apps/alol.png").is_file() for d in locations))
+            else:
+                self.assertFalse((root / "data/applications/alol.desktop").exists())
+                self.assertFalse((root / "data/icons/hicolor/256x256/apps/alol.png").exists())
+                entry = (root / "data/applications/alol-dev.desktop").read_text()
+                self.assertIn("NoDisplay=true\n", entry)
+                self.assertIn("StartupWMClass=alol-dev\n", entry)
+                self.assertIn(str(ROOT / "assets/alol.png"), entry)
             if mode == 3:
                 saved = config.read_text()
                 self.assertIn("update_policy=weekly\n", saved)
                 self.assertIn("update_notifications=false\n", saved)
+            if mode == 6:
+                options = json.loads((root / "config/alol/game-options.json").read_text())
+                self.assertFalse(options["options"]["wideScreen"])
+                self.assertEqual(data["save_visible"], 1)
+            if mode == 7:
+                self.assertEqual(data["help"], 1)
+                self.assertEqual(data["page"], 1)
+            if mode == 0:
+                self.assertEqual(data["play_visible"], 1)
             if mode == 5:
                 self.assertEqual(data["retry"], 1, data)
 
+    def test_game_settings_save_from_fixed_action_bar(self):
+        self.scenario(6, policy="manual")
+
+    def test_help_opens_recovery_section(self):
+        self.scenario(7, policy="manual")
+
     def test_startup_shows_release_dialog(self):
         self.scenario(0)
+
+    def test_standalone_copy_keeps_desktop_integration(self):
+        self.scenario(0, standalone=True)
 
     def test_manual_policy_waits_for_user_check(self):
         self.scenario(1, policy="manual")

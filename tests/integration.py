@@ -28,7 +28,7 @@ with open(os.environ['ALOL_TEST_TRACE'], 'a') as f:
         'qt': os.environ.get('QT_QPA_PLATFORM'), 'gdk': os.environ.get('GDK_BACKEND'),
         'wayland': os.environ.get('WAYLAND_DISPLAY'), 'display': os.environ.get('DISPLAY'),
         'session': os.environ.get('XDG_SESSION_TYPE'), 'mangohud': os.environ.get('MANGOHUD'),
-        'proton_wayland': os.environ.get('PROTON_ENABLE_WAYLAND')}) + '\n')
+        'proton_wayland': os.environ.get('PROTON_ENABLE_WAYLAND'), 'gameid': os.environ.get('GAMEID')}) + '\n')
 if os.environ.get('ALOL_TEST_FAIL') == exe or (os.environ.get('ALOL_TEST_FAIL_LANGUAGE') and args == [r'C:\windows\system32\reg.exe','import',r'C:\alol\locale-ru.reg']):
     (p / 'drive_c').mkdir(parents=True, exist_ok=True)
     print('injected runner error', flush=True)

@@ -339,6 +339,9 @@ fn replace_binary(source: &Path, executable: &Path, expected: &str) -> Result<()
 }
 
 pub fn install(expected: Option<&str>) -> Result<()> {
+    if crate::desktop::development_copy() {
+        return Err("Это рабочая копия проекта. Обновляйте её через Git и пересборку; версия из GitHub устанавливается отдельно.".into());
+    }
     let _lock = Lock::acquire()?;
     let executable = std::env::current_exe()
         .and_then(|p| p.canonicalize())

@@ -148,6 +148,10 @@ class DirectGame(unittest.TestCase):
                       PROTON_ENABLE_WAYLAND='1', XMODIFIERS='@im=ibus', GTK_IM_MODULE='ibus',
                       QT_IM_MODULE='fcitx', MANGOHUD='1')
         call = self.game_calls()[-1]
+        self.assertEqual(call['gameid'], 'umu-alolarizonadev')
+        metadata = self.data/'applications/steam_app_alolarizonadev.desktop'
+        self.assertIn('NoDisplay=true', metadata.read_text())
+        self.assertFalse((self.data/'applications/steam_app_default.desktop').exists())
         self.assertEqual(call['display'], ':123')
         self.assertIsNone(call['wayland'])
         self.assertEqual(call['proton_wayland'], '0')
