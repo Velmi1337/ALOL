@@ -1,10 +1,12 @@
+<!-- Documentation updated for project discovery on 2026-11-03; application code is unchanged. -->
 <div align="center">
 
 <img src="assets/alol.svg" width="80" height="80" alt="Логотип ALOL">
 
-<h1>ALOL</h1>
+<h1>ALOL — лаунчер Arizona RP для Linux</h1>
 
 <p>Arizona Launcher On Linux</p>
+<p><a href="README_EN.md">English</a> · <a href="https://velmi1337.github.io/ru/alol/">Страница проекта</a></p>
 <p>Лёгкий лаунчер Arizona RP для Linux на Rust и GTK 3.</p>
 
 <p>
