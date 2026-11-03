@@ -9,6 +9,7 @@ use std::{
 };
 
 pub const ICON: &[u8] = include_bytes!("../assets/alol.png");
+pub const ARIZONA_ICON: &[u8] = include_bytes!("../assets/arizona.png");
 
 pub fn application_id() -> &'static str {
     if development_copy() {
@@ -38,13 +39,45 @@ pub fn integrate_arizona() -> Result<()> {
         .map(|p| p.join("run-dev.sh"))
         .or_else(|| env::current_exe().ok())
         .ok_or("Не найден ALOL")?;
-    let icon = development_root()
-        .map(|p| {
-            p.join("assets/alol.png")
-                .to_string_lossy()
-                .replace('\\', "\\\\")
-        })
-        .unwrap_or_else(|| "alol".into());
+    let icon_path = metadata_root().join("icons/hicolor/256x256/apps/alol-arizona.png");
+    if fs::read(&icon_path).ok().as_deref() != Some(ARIZONA_ICON) {
+        mods::atomic_bytes(&icon_path, ARIZONA_ICON)?;
+    }
+    let icon = icon_path.to_string_lossy().replace('\\', "\\\\");
+    // Migrate the icon of our older Arizona entries without changing their
+    // Exec/profile. In particular a checkout must not redirect installed games.
+    for class in [
+        "steam_app_alolarizona",
+        "steam_app_alolarizonadev",
+        "arizona games launcher.exe",
+        "arizona launcher.exe",
+        "arizonalauncher.exe",
+    ] {
+        let entry = metadata_root()
+            .join("applications")
+            .join(format!("{class}.desktop"));
+        if let Ok(previous) = fs::read_to_string(&entry)
+            && previous
+                .lines()
+                .any(|line| line == "X-ALOL-WindowMetadata=true")
+        {
+            let text = previous
+                .lines()
+                .map(|line| {
+                    if line.starts_with("Icon=") {
+                        format!("Icon={icon}")
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            if text != previous {
+                mods::atomic_bytes(&entry, text.as_bytes())?;
+            }
+        }
+    }
     // A dedicated UMU identity avoids assigning Arizona's icon to every other
     // game using Proton's generic steam_app_default class.
     let proton_class = format!("steam_app_{}", arizona_game_id().trim_start_matches("umu-"));
@@ -58,6 +91,9 @@ pub fn integrate_arizona() -> Result<()> {
             .join("applications")
             .join(format!("{class}.desktop"));
         let previous = fs::read_to_string(&entry).ok();
+        if development_copy() && class != proton_class && previous.is_some() {
+            continue;
+        }
         let mut text = desktop_entry(&executable)?
             .replace("Name=ALOL\n", "Name=Arizona · ALOL\n")
             .replace("Icon=alol\n", &format!("Icon={icon}\n"))

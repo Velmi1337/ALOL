@@ -9,4 +9,12 @@ Development assistance: Codex (OpenAI), an AI coding assistant.
 Licensed under the Apache License, Version 2.0.
 See LICENSE for the complete license text.
 
+The optional runtime/keyboard-user32.patch modifies Wine's user32 implementation
+and is licensed under LGPL-2.1-or-later, like that Wine source. Existing Wine
+copyright notices are retained. See runtime/WINE-LICENSE.md for the license text.
+The separately built keyboard Proton includes
+the complete corresponding modified Wine source, LGPL license, patch and rebuild
+instructions in ALOL-WINE-SOURCE.tar.gz. Other original upstream runtime licenses
+remain in their distribution. The rest of ALOL remains Apache-2.0.
+
 ALOL is an independent project and is not affiliated with Arizona Games.

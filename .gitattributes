@@ -1,3 +1,5 @@
 * text=auto
 *.sh text eol=lf
 *.rs text eol=lf
+runtime/WINE-LICENSE.md -whitespace
+runtime/keyboard-user32.patch -whitespace

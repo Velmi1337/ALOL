@@ -6,6 +6,27 @@ use crate::{
 };
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
+/// Show measurements only; preserve rendering, FPS limits and synchronization.
+pub fn configure_hud(s: &Settings, command: &mut std::process::Command) {
+    if s.wined3d {
+        return;
+    }
+    if s.fps_hud {
+        let inherited = std::env::var("DXVK_HUD").unwrap_or_default();
+        let mut values: Vec<_> = inherited
+            .split(',')
+            .filter(|v| !v.is_empty() && *v != "0")
+            .collect();
+        if !values.contains(&"fps") {
+            values.push("fps");
+        }
+        if !values.contains(&"frametimes") {
+            values.push("frametimes");
+        }
+        command.env("DXVK_HUD", values.join(","));
+    }
+}
+
 pub struct OptionSpec {
     pub id: &'static str,
     pub label: &'static str,

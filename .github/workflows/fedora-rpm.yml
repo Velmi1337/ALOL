@@ -31,13 +31,13 @@ jobs:
           persist-credentials: false
       - name: Download and build the exact released source in Fedora
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version=${RELEASE_TAG#v}
-          curl --fail --location --retry 8 --retry-all-errors --retry-delay 5 \
-            --proto '=https' --proto-redir '=https' \
-            "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/alol-$version.tar.gz" \
-            --output "$RUNNER_TEMP/alol-source.tar.gz"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "alol-$version.tar.gz" --output "$RUNNER_TEMP/alol-source.tar.gz"
           mkdir -p "$RUNNER_TEMP/fedora-out"
           chmod 777 "$RUNNER_TEMP/fedora-out"
           docker run --rm \

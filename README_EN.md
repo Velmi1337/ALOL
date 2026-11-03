@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- English documentation added on 2026-11-03; application code is unchanged. -->
+<!-- English documentation for ALOL 0.5.8. -->
 # ALOL — Arizona RP launcher for Linux
 
 **Arizona Launcher On Linux. A native Rust and GTK 3 launcher.**
@@ -18,12 +18,12 @@ The published interface screenshots are in Russian.
 ## Install
 
 Choose a package from the [latest GitHub release](https://github.com/Velmi1337/ALOL/releases/latest).
-The commands below use the currently published `0.5.7` filenames; use the filename of the version you downloaded.
+The commands below use the currently published `0.5.8` filenames; use the filename of the version you downloaded.
 
 ### Arch Linux / CachyOS
 
 ```sh
-sudo pacman -U ./alol-0.5.7-1-x86_64.pkg.tar.zst
+sudo pacman -U ./alol-0.5.8-1-x86_64.pkg.tar.zst
 ```
 
 Enable `multilib` and install suitable 32-bit and 64-bit graphics drivers for your system.
@@ -31,7 +31,7 @@ Enable `multilib` and install suitable 32-bit and 64-bit graphics drivers for yo
 ### Fedora 44+
 
 ```sh
-sudo dnf install ./alol-0.5.7-1.fc44.x86_64.rpm
+sudo dnf install ./alol-0.5.8-1.fc44.x86_64.rpm
 ```
 
 The RPM installs its Wine and winetricks dependencies. A Russian system locale is not required.
@@ -55,6 +55,7 @@ Your game-account password is entered in the game; ALOL does not store it.
 
 - **Game launch:** server selection with a separate saved nickname per server.
 - **Environment:** documented Wine/Proton setup, fonts and Visual C++ preparation.
+- **ALOL-Proton:** the Arizona launch profile and EN/RU indicator fix in one ready-to-download runtime; [setup](docs/proton.md).
 - **Mods and options:** mod tools, custom files/archives, graphics and memory settings.
 - **Repair:** fixes for common Russian-text, font and environment problems with backups.
 - **Launcher updates:** release checking and the documented update/restart flow.
@@ -79,6 +80,7 @@ News and release announcements are also available in the existing [@alolinux Tel
 
 Current development sources use **[Apache License 2.0](LICENSE)**.
 Copyright (c) 2026 ALOL contributors. The project author and maintainer is **Velmi1337**.
+The optional Wine patch remains LGPL-2.1-or-later, with complete corresponding source supplied in the runtime payload.
 **Codex (OpenAI)** assisted with development and automated checks; see [NOTICE](NOTICE).
 
 When distributing copies or derivative works, include the applicable license, preserve relevant notices,

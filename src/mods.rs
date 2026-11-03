@@ -1,6 +1,5 @@
 //! Official Arizona API adapter and reversible local mod installation.
 use crate::{
-    archive,
     core::{self, Result, Settings},
     json::{self, Value, object, string},
 };
@@ -11,6 +10,7 @@ use std::{
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     process::Command,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 const APIS: [&str; 2] = [
@@ -202,7 +202,7 @@ fn mod_dir(s: &Settings, id: &str) -> Result<PathBuf> {
     valid_id(id)?;
     Ok(store(s)?.join(id))
 }
-fn target(root: &Path, relative: &Path) -> Result<PathBuf> {
+pub(crate) fn target(root: &Path, relative: &Path) -> Result<PathBuf> {
     let mut out = root.to_path_buf();
     for part in relative.components() {
         let part = part.as_os_str();
@@ -240,7 +240,7 @@ fn target(root: &Path, relative: &Path) -> Result<PathBuf> {
     }
     Ok(out)
 }
-fn files(root: &Path) -> Result<Vec<PathBuf>> {
+pub(crate) fn files(root: &Path) -> Result<Vec<PathBuf>> {
     fn visit(base: &Path, p: &Path, out: &mut Vec<PathBuf>, depth: usize) -> Result<()> {
         if depth > 32 {
             return Err("Слишком глубокая структура мода".into());
@@ -473,15 +473,32 @@ fn enable(s: &Settings, id: &str) -> Result<()> {
     if payload.is_empty() {
         return Err("В моде нет файлов".into());
     }
-    let mut owned = BTreeSet::new();
+    let mut owned = BTreeMap::new();
     for m in installed(s)? {
         if m.active && m.id != id {
             for f in state(s, &m.id)?.get("files").array() {
-                owned.insert(f.get("path").text().to_lowercase());
+                owned.insert(
+                    f.get("path").text().to_lowercase(),
+                    (m.id.clone(), f.get("sha256").text()),
+                );
             }
         }
     }
     let mut records = Vec::new();
+    let mut depends_on = BTreeSet::new();
+    for required in v.get("meta").get("required_paths").array() {
+        if let Some((owner, _)) = owned.get(&required.text().to_lowercase()) {
+            depends_on.insert(owner.clone());
+        }
+        if !target(&root, &safe_relative(&required.text())?)?.is_file()
+            && !target(&source, &safe_relative(&required.text())?)?.is_file()
+        {
+            return Err(format!(
+                "Зависимость отсутствует: {}. Установите или включите её через ALOL.",
+                required.text()
+            ));
+        }
+    }
     let mut total = 0;
     for p in payload {
         let dest = target(&root, &p)?;
@@ -493,7 +510,14 @@ fn enable(s: &Settings, id: &str) -> Result<()> {
             .map_err(err)?
             .to_string_lossy()
             .replace('\\', "/");
-        if owned.contains(&rel.to_lowercase()) {
+        if let Some((owner, expected)) = owned.get(&rel.to_lowercase()) {
+            if rel.to_lowercase().starts_with("moonloader/lib/")
+                && hash(&source.join(&p), "sha256")? == *expected
+                && hash(&dest, "sha256")? == *expected
+            {
+                depends_on.insert(owner.clone());
+                continue;
+            }
             return Err(format!(
                 "Другой включённый мод уже меняет {rel}. Сначала отключите его."
             ));
@@ -518,6 +542,10 @@ fn enable(s: &Settings, id: &str) -> Result<()> {
         ]));
     }
     v.put("files", Value::Array(records));
+    v.put(
+        "depends_on",
+        Value::Array(depends_on.iter().map(string).collect()),
+    );
     v.put("status", string("installing"));
     write_state(s, &v)?;
     let result = (|| {
@@ -548,6 +576,22 @@ fn enable(s: &Settings, id: &str) -> Result<()> {
 fn restore(s: &Settings, v: &Value) -> Result<()> {
     let root = game_dir(s)?;
     let d = mod_dir(s, &v.get("id").text())?;
+    for dependent in installed(s)?
+        .into_iter()
+        .filter(|m| m.active && m.id != v.get("id").text())
+    {
+        if state(s, &dependent.id)?
+            .get("depends_on")
+            .array()
+            .iter()
+            .any(|id| id.text() == v.get("id").text())
+        {
+            return Err(format!(
+                "От этого мода зависит «{}». Сначала отключите зависимый мод в ALOL.",
+                dependent.name
+            ));
+        }
+    }
     // Check every file before changing any; preserve edits made after installation.
     for f in v.get("files").array() {
         let dest = target(&root, &safe_relative(&f.get("path").text())?)?;
@@ -636,9 +680,15 @@ impl Drop for Staging {
     }
 }
 fn staging() -> Result<Staging> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let base = core::data_dir().join("mods/staging");
     fs::create_dir_all(&base).map_err(err)?;
-    let p = base.join(format!("{}-{}", core::stamp(), std::process::id()));
+    let p = base.join(format!(
+        "{}-{}-{}",
+        core::stamp(),
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     fs::create_dir(&p).map_err(err)?;
     Ok(Staging(p))
 }
@@ -768,7 +818,7 @@ fn official_install(s: &Settings, id: &str) -> Result<()> {
         &payload,
     )
 }
-fn local_install(s: &Settings, path: &Path, mode: &str) -> Result<()> {
+fn local_install(s: &Settings, path: &Path, mode: &str, preview: bool) -> Result<()> {
     if !path.is_absolute() || !path.is_file() || path.is_symlink() {
         return Err("Выберите обычный файл мода по абсолютному пути".into());
     }
@@ -776,123 +826,88 @@ fn local_install(s: &Settings, path: &Path, mode: &str) -> Result<()> {
         return Err("Неизвестная папка установки мода".into());
     }
     let stage = staging()?;
-    let raw = stage.0.join("raw");
-    fs::create_dir(&raw).map_err(err)?;
-    let ext = path
-        .extension()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_lowercase();
-    if ["zip", "rar", "7z", "tar", "gz", "xz", "bz2"].contains(&ext.as_str()) {
-        archive::extract(path, &raw)?;
-    } else if [
-        "asi", "cs", "cleo", "lua", "luac", "dll", "ini", "cfg", "dff", "txd", "col", "ifp",
-    ]
-    .contains(&ext.as_str())
-    {
-        if fs::metadata(path).map_err(err)?.len() > MAX_FILE {
-            return Err("Файл больше 2 ГБ".into());
-        }
-        let name = path.file_name().ok_or("Нет имени файла")?;
-        safe_relative(&name.to_string_lossy())?;
-        fs::copy(path, raw.join(name)).map_err(err)?;
-    } else {
-        return Err(
-            "Поддерживаются ZIP, RAR, 7z, TAR и файлы ASI, CLEO, Lua, DLL, DFF, TXD, IFP".into(),
-        );
-    }
-    let folders = [
-        "modloader",
-        "cleo",
-        "moonloader",
-        "models",
-        "data",
-        "audio",
-        "scripts",
-        "fontcustom",
-        "samp",
-        "cef",
-        "libs",
-    ];
-    let mut base = raw;
-    for _ in 0..4 {
-        let entries: Vec<_> = fs::read_dir(&base)
-            .map_err(err)?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(err)?;
-        if entries.len() == 1
-            && entries[0].file_type().map_err(err)?.is_dir()
-            && !folders.iter().any(|n| {
-                entries[0]
-                    .file_name()
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case(n)
-            })
-        {
-            base = entries[0].path();
-        } else {
-            break;
-        }
-    }
-    let paths = files(&base)?;
-    if paths.is_empty() {
-        return Err("В архиве нет файлов мода".into());
-    }
+    let root = game_dir(s)?;
+    let raw = crate::mod_import::unpack(path, &stage.0)?;
     let name = path
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
     let slug = format!("alol-{}", fnv(&name));
-    let structured = paths.iter().any(|p| {
-        p.components().next().is_some_and(|c| {
-            folders
-                .iter()
-                .any(|n| c.as_os_str().to_string_lossy().eq_ignore_ascii_case(n))
-        })
-    });
-    let chosen = if mode != "auto" {
-        mode
-    } else if structured {
-        "root"
-    } else if paths.iter().any(|p| {
-        p.extension()
-            .is_some_and(|e| ["lua", "luac"].iter().any(|n| e.eq_ignore_ascii_case(n)))
-    }) {
-        "moonloader"
-    } else if paths.iter().any(|p| {
-        p.extension()
-            .is_some_and(|e| ["cs", "cleo"].iter().any(|n| e.eq_ignore_ascii_case(n)))
-    }) {
-        "cleo"
-    } else if paths.iter().all(|p| {
-        p.extension().is_some_and(|e| {
-            ["dff", "txd", "col", "ifp", "txt", "png", "jpg"]
-                .iter()
-                .any(|n| e.eq_ignore_ascii_case(n))
-        })
-    }) {
-        "modloader"
-    } else {
-        "root"
-    };
-    let prefix = match chosen {
-        "root" => PathBuf::new(),
-        "modloader" => PathBuf::from("modloader").join(slug),
-        other => PathBuf::from(other),
-    };
-    let payload = stage.0.join("payload");
-    for p in paths {
-        let dest = payload.join(&prefix).join(&p);
-        fs::create_dir_all(dest.parent().unwrap()).map_err(err)?;
-        fs::copy(base.join(p), dest).map_err(err)?;
+    let mut plan = crate::mod_import::plan(&raw, &stage.0, &root, &slug, mode)?;
+    println!("{}", plan.summary());
+    if preview {
+        return Ok(());
     }
+    if !plan.loaders.is_empty() {
+        install_loaders(s, &plan.loaders)?;
+        plan = crate::mod_import::plan(&raw, &stage.0, &root, &slug, mode)?;
+        if !plan.loaders.is_empty() || !plan.missing_modules.is_empty() {
+            return Err(format!("Зависимости не установлены. {}", plan.summary()));
+        }
+    }
+    if !plan.missing_modules.is_empty() {
+        return Err("Установка остановлена до изменения файлов игры: не найдены библиотеки. Их можно добавить отдельным архивом через ALOL.".into());
+    }
+    let payload = stage.0.join("payload");
+    for (source, relative) in &plan.entries {
+        let dest = payload.join(relative);
+        fs::create_dir_all(dest.parent().unwrap()).map_err(err)?;
+        fs::copy(source, dest).map_err(err)?;
+    }
+    let meta = object([(
+        "required_paths",
+        Value::Array(plan.required_paths.iter().map(string).collect()),
+    )]);
     let id = format!("local-{}-{}", core::stamp(), std::process::id());
-    add_payload(s, &id, &name, "local", "", object([]), &payload)
+    add_payload(s, &id, &name, "local", "", meta, &payload)
 }
+fn install_loaders(s: &Settings, required: &BTreeSet<String>) -> Result<()> {
+    let mut candidates = catalog()?;
+    if required.iter().any(|loader| {
+        !candidates
+            .iter()
+            .any(|m| loader_name(&m.name) == loader_name(loader))
+    }) {
+        println!("Проверка загрузчиков в официальном каталоге Arizona…");
+        execute(s, "mods-refresh", &[])?;
+        candidates = catalog()?;
+    }
+    // Resolve all names before downloading or installing the first loader.
+    let mut selected = Vec::new();
+    for loader in required {
+        let matches: Vec<_> = candidates
+            .iter()
+            .filter(|m| loader_name(&m.name) == loader_name(loader))
+            .collect();
+        if matches.len() != 1 {
+            return Err(format!(
+                "Не найден однозначный официальный {loader}. Добавьте архив загрузчика через ALOL → Моды → Свой мод, затем повторите установку. Файлы этого мода не установлены."
+            ));
+        }
+        let id = format!("official-{}", matches[0].id);
+        selected.push((loader.clone(), matches[0].id.clone(), id));
+    }
+    for (loader, native, id) in selected {
+        println!("Зависимость: {loader} из официального каталога Arizona");
+        if mod_dir(s, &id)?.join("state.json").is_file() {
+            enable(s, &id)?;
+        } else {
+            official_install(s, &native)?;
+        }
+    }
+    Ok(())
+}
+fn loader_name(name: &str) -> String {
+    name.to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect()
+}
+
 pub fn execute(s: &Settings, action: &str, args: &[String]) -> Result<()> {
     // Finish or undo an interrupted transaction before another file operation.
-    if action != "mods-refresh" {
+    if !["mods-refresh", "mods-preview"].contains(&action) {
         for m in installed(s)? {
             let v = state(s, &m.id)?;
             if v.get("status").text() == "installing" {
@@ -910,10 +925,11 @@ pub fn execute(s: &Settings, action: &str, args: &[String]) -> Result<()> {
             Ok(())
         }
         "mods-install" => official_install(s, args.first().ok_or("Выберите мод")?),
-        "mods-add" => local_install(
+        "mods-add" | "mods-preview" => local_install(
             s,
             Path::new(args.first().ok_or("Выберите файл мода")?),
             args.get(1).map(String::as_str).unwrap_or("auto"),
+            action == "mods-preview",
         ),
         "mods-enable" => enable(s, args.first().ok_or("Выберите мод")?),
         "mods-disable" | "mods-remove" => {

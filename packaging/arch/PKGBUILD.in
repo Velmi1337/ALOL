@@ -10,6 +10,7 @@ depends=('gtk3' 'glib2' 'cairo' 'libarchive' 'curl' 'umu-launcher' 'polkit' 'gli
 makedepends=('rust' 'python')
 checkdepends=('desktop-file-utils')
 optdepends=(
+    'gamemode: optional CPU and scheduler optimisations while playing'
     'wine-staging: alternative to Proton, with a separate Wine prefix'
     'winetricks: components for the system Wine runner'
 )
@@ -39,6 +40,7 @@ check() {
     PYTHONDONTWRITEBYTECODE=1 python3 tests/mods_integration.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/game_integration.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/update_integration.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/proton_runtime.py
 }
 
 package() {

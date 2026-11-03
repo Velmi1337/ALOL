@@ -319,6 +319,8 @@ enum Action {
     ModInstall,
     ModFile,
     ModImport,
+    ModPreview,
+    RuntimePrepare,
     ModManage(&'static str),
     PlayerChanged,
     Update,
@@ -346,6 +348,8 @@ struct Fields {
     no_sync: W,
     launcher_compatibility: W,
     input_compatibility: W,
+    fps_hud: W,
+    game_mode: W,
     update_policy: W,
     update_notifications: W,
 }
@@ -374,13 +378,14 @@ struct App {
     signals: Vec<SignalHolder>,
     child: Option<Child>,
     action: String,
-    log_text: String,
+    log_reader: core::LogTail,
     stop_at: Option<i64>,
     mods_page: W,
     mod_list: W,
     mod_search: W,
     mod_file: W,
     mod_target: W,
+    mod_preview: W,
     installed_combo: W,
     mod_count: W,
     catalog_items: Vec<CatalogMod>,
@@ -507,6 +512,8 @@ impl App {
             no_sync: checked(f.no_sync),
             launcher_compatibility: checked(f.launcher_compatibility),
             input_compatibility: checked(f.input_compatibility),
+            fps_hud: checked(f.fps_hud),
+            game_mode: checked(f.game_mode),
             update_policy: ["startup", "daily", "weekly", "manual"]
                 .get(unsafe { gtk_combo_box_get_active(f.update_policy) } as usize)
                 .ok_or("Выберите режим проверки обновлений")?
@@ -696,6 +703,9 @@ impl App {
                 "winecfg" => "Открыты настройки Wine",
                 "doctor" => "Диагностика…",
                 "self-update" => "Загрузка и установка обновления ALOL…",
+                "runtime-prepare" => {
+                    "Подготовка экспериментального ALOL-Proton · база около 539 МБ…"
+                }
                 _ => "Выполняется…",
             },
         );
@@ -722,6 +732,7 @@ impl App {
             return Ok(());
         }
         match action {
+            Action::RuntimePrepare => self.start_args("runtime-prepare", &["--select".into()])?,
             Action::SettingsChanged => set_label(
                 self.settings_hint,
                 "Есть изменения. Нажмите «Сохранить настройки».",
@@ -800,14 +811,21 @@ impl App {
             Action::ModFile => {
                 self.dispatch(Action::Browse(self.mod_file, false))?;
             }
-            Action::ModImport => {
+            Action::ModImport | Action::ModPreview => {
                 let file = entry_text(self.mod_file);
                 let selected = unsafe { gtk_combo_box_get_active(self.mod_target) };
                 let mode = ["auto", "root", "modloader", "cleo", "moonloader"]
                     .get(selected as usize)
                     .copied()
                     .unwrap_or("auto");
-                self.start_args("mods-add", &[file, mode.into()])?;
+                self.start_args(
+                    if matches!(action, Action::ModPreview) {
+                        "mods-preview"
+                    } else {
+                        "mods-add"
+                    },
+                    &[file, mode.into()],
+                )?;
             }
             Action::ModManage(operation) => {
                 let index = unsafe { gtk_combo_box_get_active(self.installed_combo) };
@@ -1123,9 +1141,11 @@ impl App {
             }
             pack(installed, row, false);
             let local = card(page, "Свой мод", "");
-            let (_, import) = disclosure(local, "Добавить файл или архив");
+            let (expander, import) = disclosure(local, "Добавить файл или архив");
+            gtk_widget_set_name(expander, c"alol-mod-import".as_ptr());
             let row = box_new(false, 10);
             self.mod_file = entry("");
+            gtk_widget_set_name(self.mod_file, c"alol-mod-file".as_ptr());
             gtk_entry_set_placeholder_text(self.mod_file, c"ZIP, RAR, 7z, ASI, CS, Lua…".as_ptr());
             pack(row, self.mod_file, true);
             self.button(row, "Выбрать файл", Action::ModFile, false);
@@ -1144,15 +1164,19 @@ impl App {
             gtk_combo_box_set_active(self.mod_target, 0);
             pack(row, self.mod_target, true);
             self.button(row, "Добавить мод", Action::ModImport, false);
+            self.button(row, "Проверить", Action::ModPreview, false);
             pack(import, row, false);
             pack(
                 import,
                 label(
-                    "Для Lua нужен MoonLoader, для CS — CLEO. Структура архива сохраняется.",
+                    "ALOL распакует архив и разложит Lua, CLEO, ASI и библиотеки. Недостающие загрузчики ищутся в официальном каталоге Arizona. Сначала можно проверить план установки.",
                     "caption",
                 ),
                 false,
             );
+            self.mod_preview = label("", "caption");
+            gtk_widget_set_name(self.mod_preview, c"alol-mod-preview".as_ptr());
+            pack(import, self.mod_preview, false);
             page
         }
     }
@@ -1276,6 +1300,9 @@ impl App {
                 Ok(Some(status)) => {
                     let stopped = self.stop_at.take().is_some();
                     self.child = None;
+                    if self.action == "mods-preview" {
+                        set_label(self.mod_preview, &core::tail_log());
+                    }
                     if self.action == "self-update" {
                         if status.success() {
                             self.update_installed = true;
@@ -1304,6 +1331,10 @@ impl App {
                     if let Ok(s) = Settings::load() {
                         unsafe {
                             gtk_entry_set_text(self.fields.proton, c(&s.proton).as_ptr());
+                            gtk_combo_box_set_active(
+                                self.fields.runner,
+                                if s.runner == "wine" { 1 } else { 0 },
+                            );
                         }
                         self.settings = s;
                     }
@@ -1357,12 +1388,10 @@ impl App {
                 Ok(None) => (),
             }
         }
-        let log = core::tail_log();
-        if log != self.log_text {
+        if let Some(log) = self.log_reader.changed() {
             unsafe {
                 gtk_text_buffer_set_text(self.log_buffer, c(&log).as_ptr(), -1);
             }
-            self.log_text = log;
         }
         if self.update_prompt_pending && self.child.is_none() && self.update_dialog.is_null() {
             self.update_prompt_pending = false;
@@ -2011,6 +2040,8 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             no_sync: ptr::null_mut(),
             launcher_compatibility: ptr::null_mut(),
             input_compatibility: ptr::null_mut(),
+            fps_hud: ptr::null_mut(),
+            game_mode: ptr::null_mut(),
             update_policy: ptr::null_mut(),
             update_notifications: ptr::null_mut(),
         };
@@ -2042,13 +2073,14 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             signals: Vec::new(),
             child: None,
             action: String::new(),
-            log_text: String::new(),
+            log_reader: core::LogTail::default(),
             stop_at: None,
             mods_page: ptr::null_mut(),
             mod_list: ptr::null_mut(),
             mod_search: ptr::null_mut(),
             mod_file: ptr::null_mut(),
             mod_target: ptr::null_mut(),
+            mod_preview: ptr::null_mut(),
             installed_combo: ptr::null_mut(),
             mod_count: ptr::null_mut(),
             catalog_items: Vec::new(),
@@ -2208,6 +2240,38 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             ),
             false,
         );
+        let performance = card(
+            settings_page,
+            "Производительность",
+            "Оптимизация запуска без изменения качества графики.",
+        );
+        let game_mode = check(performance, "Использовать GameMode", settings.game_mode);
+        gtk_widget_set_name(game_mode, c"alol-game-mode".as_ptr());
+        gtk_widget_set_tooltip_text(game_mode, c"GameMode временно применяет оптимизации CPU и планировщика на время игры. Текстуры, эффекты, разрешение и синхронизация не меняются. Прирост зависит от системы.".as_ptr());
+        if !core::available("gamemoderun") {
+            pack(
+                performance,
+                label(
+                    "GameMode не установлен. Для использования нужен пакет gamemode; игра запускается и без него.",
+                    "caption",
+                ),
+                false,
+            );
+        }
+        let fps_hud = check(
+            performance,
+            "Показывать FPS и время кадра · DXVK",
+            settings.fps_hud,
+        );
+        gtk_widget_set_name(fps_hud, c"alol-fps-hud".as_ptr());
+        pack(
+            performance,
+            label(
+                "Счётчик доступен при запуске через «Играть» с DXVK / Vulkan.",
+                "caption",
+            ),
+            false,
+        );
         let game_card = card(settings_page, "Игра", "");
         pack(game_card, label("Память игры", "field-label"), false);
         app.game_memory = gtk_combo_box_text_new();
@@ -2323,7 +2387,7 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         pack(advanced, runtime, false);
         pack(advanced, label("Сборка Proton", "field-label"), false);
         let combo = gtk_combo_box_text_new_with_entry();
-        for item in ["GE-Proton", "UMU-Proton"] {
+        for item in ["GE-Proton", "UMU-Proton", "ALOL-Proton"] {
             gtk_combo_box_text_append_text(combo, c(item).as_ptr());
         }
         for path in core::proton_versions() {
@@ -2332,6 +2396,20 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         let proton = gtk_bin_get_child(combo);
         gtk_entry_set_text(proton, c(&settings.proton).as_ptr());
         pack(advanced, combo, false);
+        app.button(
+            advanced,
+            "Создать и выбрать ALOL-Proton",
+            Action::RuntimePrepare,
+            false,
+        );
+        pack(
+            advanced,
+            label(
+                "Наш профиль Arizona и исправление индикатора EN / RU в одной сборке. Подготовка скачает готовые проверенные файлы; компиляция Wine не нужна. Требуется совместимость клавиатуры / XWayland. Старые сборки сохраняются.",
+                "caption",
+            ),
+            false,
+        );
         pack(
             advanced,
             label(
@@ -2381,6 +2459,20 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             "Установка, восстановление и проверка окружения без удаления игры.",
         );
         pack(help_card, expander, false);
+        app.button(
+            help_card,
+            "Сбросить кэш лаунчера с резервной копией",
+            Action::Work("clean-cache"),
+            false,
+        );
+        pack(
+            help_card,
+            label(
+                "Для пустого или повреждённого интерфейса Arizona. Моды, настройки и шейдеры сохраняются. На FPS игры очистка этого кэша не влияет.",
+                "caption",
+            ),
+            false,
+        );
         app.fields = Fields {
             runner,
             proton,
@@ -2395,6 +2487,8 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             no_sync,
             launcher_compatibility,
             input_compatibility,
+            fps_hud,
+            game_mode,
             update_policy,
             update_notifications,
         };
@@ -2411,6 +2505,8 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             disable_gpu,
             launcher_compatibility,
             input_compatibility,
+            fps_hud,
+            game_mode,
             discrete_gpu,
             no_sync,
             debug,

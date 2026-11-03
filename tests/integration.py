@@ -23,19 +23,24 @@ with open(os.environ['ALOL_TEST_TRACE'], 'a') as f:
         'verb': os.environ.get('PROTON_VERB'), 'wined3d': os.environ.get('PROTON_USE_WINED3D'),
         'winearch': os.environ.get('WINEARCH'), 'prime': os.environ.get('DRI_PRIME'),
         'install_path': os.environ.get('STEAM_COMPAT_INSTALL_PATH'), 'cwd': os.getcwd(),
-        'lc_all': os.environ.get('LC_ALL'), 'lang': os.environ.get('LANG'), 'locpath': os.environ.get('LOCPATH'),
+        'lc_all': os.environ.get('LC_ALL'), 'host_lc_all': os.environ.get('HOST_LC_ALL'), 'lang': os.environ.get('LANG'), 'locpath': os.environ.get('LOCPATH'),
         'xim': os.environ.get('XMODIFIERS'), 'gtk_im': os.environ.get('GTK_IM_MODULE'), 'qt_im': os.environ.get('QT_IM_MODULE'),
         'qt': os.environ.get('QT_QPA_PLATFORM'), 'gdk': os.environ.get('GDK_BACKEND'),
         'wayland': os.environ.get('WAYLAND_DISPLAY'), 'display': os.environ.get('DISPLAY'),
         'session': os.environ.get('XDG_SESSION_TYPE'), 'mangohud': os.environ.get('MANGOHUD'),
-        'proton_wayland': os.environ.get('PROTON_ENABLE_WAYLAND'), 'gameid': os.environ.get('GAMEID')}) + '\n')
+        'proton_wayland': os.environ.get('PROTON_ENABLE_WAYLAND'), 'gameid': os.environ.get('GAMEID'),
+        'dxvk_config': os.environ.get('DXVK_CONFIG'), 'dxvk_frame_rate': os.environ.get('DXVK_FRAME_RATE'),
+        'dxvk_hud': os.environ.get('DXVK_HUD'), 'target_kind': os.environ.get('ALOL_TARGET_KIND'),
+        'keyboard_state': os.environ.get('ALOL_KEYBOARD_STATE'),
+        'keyboard_state_exists': bool(os.environ.get('ALOL_KEYBOARD_STATE')) and
+            (p/'drive_c/alol'/os.environ['ALOL_KEYBOARD_STATE'].rsplit('\\',1)[-1]).is_file()}) + '\n')
 if os.environ.get('ALOL_TEST_FAIL') == exe or (os.environ.get('ALOL_TEST_FAIL_LANGUAGE') and args == [r'C:\windows\system32\reg.exe','import',r'C:\alol\locale-ru.reg']):
     (p / 'drive_c').mkdir(parents=True, exist_ok=True)
     print('injected runner error', flush=True)
     sys.exit(42)
 if os.environ.get('ALOL_TEST_SLEEP') == exe:
     pathlib.Path(os.environ['ALOL_TEST_READY']).touch()
-    time.sleep(10)
+    time.sleep(float(os.environ.get('ALOL_TEST_SLEEP_SECONDS','10')))
 if exe in ('createprefix', r'C:\windows\system32\wineboot.exe'):
     (p / 'drive_c').mkdir(parents=True, exist_ok=True)
     (p / 'system.reg').touch()
@@ -62,6 +67,9 @@ elif exe.endswith(('Arizona Games Launcher.exe','gta_sa.exe')) and os.environ.ge
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     sidecar.write_text('[ZoneTransfer]\nZoneId=3\n')
     time.sleep(2.5)
+    if os.environ.get('ALOL_TEST_ASSERT_ZONE_CLEANED') and sidecar.exists():
+        print('metadata was not cleaned while game was running', flush=True)
+        sys.exit(45)
 print('fake runner completed:', exe, flush=True)
 '''
 
@@ -154,6 +162,7 @@ class Workflow(unittest.TestCase):
         self.assertIsNone(last["winearch"])
         self.assertEqual(last["prime"], "1")
         self.assertEqual(last['lc_all'],'ru_RU.UTF-8')
+        self.assertEqual(last['host_lc_all'],'ru_RU.UTF-8')
         self.assertFalse((self.root / "PWNED").exists())
 
     def test_runner_failure_is_reported_without_false_install(self):
@@ -201,6 +210,50 @@ class Workflow(unittest.TestCase):
         self.assertFalse((self.prefix / 'drive_c/Arizona Games Launcher/Arizona Games Launcher.exe').exists())
         self.run_alol("install")
         self.assertTrue((self.prefix / 'winetricks.log').exists())
+
+    def test_alol_runtime_requires_keyboard_files_before_running_or_selecting(self):
+        import hashlib
+        source=Path(__file__).resolve().parents[1]
+        recipe=json.loads((source/'runtime/base.json').read_text())
+        runtime=self.data/'alol/runtimes'/recipe['runtime_name']
+        (runtime/'files/bin').mkdir(parents=True)
+        (runtime/'files/bin/wine').touch()
+        (runtime/'toolmanifest.vdf').write_text('fixture')
+        (runtime/'compatibilitytool.vdf').write_text('fixture registration')
+        (runtime/'proton').write_bytes((source/'runtime/proton_wrapper.py').read_bytes())
+        upstream=runtime/'proton.alol-upstream';upstream.write_bytes(b'upstream fixture')
+        marker={'recipe':recipe,'upstream_proton_sha256':hashlib.sha256(upstream.read_bytes()).hexdigest(),
+                'tool_vdf_sha256':hashlib.sha256((runtime/'compatibilitytool.vdf').read_bytes()).hexdigest()}
+        (runtime/'alol-runtime.json').write_text(json.dumps(marker))
+        self.write_config(proton='ALOL-Proton')
+        self.run_alol('prepare',success=False)
+        self.assertFalse(self.trace.exists())
+        self.run_alol('runtime-prepare',arguments=('--select',),success=False)
+        self.assertIn('proton=ALOL-Proton\n',self.config.read_text())
+
+    def test_missing_alol_runtime_does_not_silently_launch_another_proton(self):
+        self.run_alol('install')
+        count=len(self.calls())
+        self.write_config(proton='ALOL-Proton')
+        result=self.run_alol('launch',success=False)
+        self.assertIn('ALOL-Proton',result.stderr)
+        self.assertEqual(len(self.calls()),count)
+
+    def test_cache_reset_keeps_settings_and_shaders_without_starting_wine(self):
+        self.run_alol('install')
+        profile=self.prefix/'drive_c/users/steamuser/AppData/Roaming/arizona-launcher'
+        (profile/'Cache').mkdir(parents=True)
+        (profile/'Cache/data').write_bytes(b'web cache')
+        (profile/'settings.json').write_bytes(b'account settings')
+        shader=self.prefix/'drive_c/users/steamuser/AppData/Local/dxvk'
+        shader.mkdir(parents=True);(shader/'shader.cache').write_bytes(b'shader cache')
+        count=len(self.calls())
+        self.run_alol('clean-cache')
+        self.assertEqual(len(self.calls()),count)
+        self.assertFalse((profile/'Cache').exists())
+        self.assertEqual(next(profile.glob('Cache.alol-backup-*')).joinpath('data').read_bytes(),b'web cache')
+        self.assertEqual((profile/'settings.json').read_bytes(),b'account settings')
+        self.assertEqual((shader/'shader.cache').read_bytes(),b'shader cache')
 
     def test_only_missing_components_are_installed(self):
         self.prefix.mkdir(parents=True)

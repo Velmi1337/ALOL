@@ -1,4 +1,4 @@
-<!-- Documentation updated for project discovery on 2026-11-03; application code is unchanged. -->
+<!-- Project documentation for ALOL 0.5.8. -->
 <div align="center">
 
 <img src="assets/alol.svg" width="80" height="80" alt="Логотип ALOL">
@@ -26,7 +26,7 @@
 ### Arch Linux / CachyOS
 
 ```sh
-sudo pacman -U ./alol-0.5.7-1-x86_64.pkg.tar.zst
+sudo pacman -U ./alol-0.5.8-1-x86_64.pkg.tar.zst
 ```
 
 Нужны включённый `multilib` и подходящие 32/64-битные графические драйверы.
@@ -34,7 +34,7 @@ sudo pacman -U ./alol-0.5.7-1-x86_64.pkg.tar.zst
 ### Fedora 44+
 
 ```sh
-sudo dnf install ./alol-0.5.7-1.fc44.x86_64.rpm
+sudo dnf install ./alol-0.5.8-1.fc44.x86_64.rpm
 ```
 
 RPM установит Wine и winetricks. Системная русская локаль не требуется. GE-Proton доступен при установленном UMU.
@@ -46,6 +46,7 @@ RPM установит Wine и winetricks. Системная русская л�
 
 - **Запуск игры** — выбор сервера, сохранение отдельного никнейма для каждого сервера.
 - **Готовое окружение** — Proton или Wine, автоматическая установка шрифтов и Visual C++.
+- **Наш ALOL-Proton** — профиль Arizona и исправление индикатора EN/RU в одной готовой сборке: [подготовка и выбор](docs/proton.md).
 - **Моды и настройки** — официальный каталог, свои файлы и архивы, параметры графики и памяти.
 - **Починка** — исправление русского текста, ошибок шрифтов и окружения с резервными копиями.
 - **Обновления ALOL** — фоновая проверка новых версий, установка и перезапуск из окна лаунчера.
@@ -99,6 +100,7 @@ ALOL его не хранит.
 | [Установка](docs/installation.md) | Пакеты, исходники и другие дистрибутивы |
 | [Руководство](docs/guide.md) | Настройки, моды, починка и команды CLI |
 | [Совместимость](docs/compatibility.md) | Wine, Proton и драйверы |
+| [ALOL-Proton](docs/proton.md) | Экспериментальный пакет GE с профилем Arizona, подготовка и проверка |
 | [Разработка](docs/development.md) | Сборка, проверки и публикация |
 | [История изменений](CHANGELOG.md) | Что нового в ALOL |
 

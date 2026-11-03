@@ -147,6 +147,13 @@ def main():
             raise ValueError("PKGBUILD source checksum was not generated correctly")
         artifacts.extend([package, pkgbuild])
     artifacts.extend(ROOT / name for name in ("LICENSE", "NOTICE"))
+    if args.platform != "fedora":
+        runtime_spec = spec_from_file_location("alol_runtime_audit", ROOT / "scripts/audit-runtime.py")
+        runtime_audit = module_from_spec(runtime_spec)
+        runtime_spec.loader.exec_module(runtime_audit)
+        runtime_artifact = runtime_audit.audit(args.directory)
+        if runtime_artifact:
+            artifacts.append(runtime_artifact)
     artifacts.extend(ROOT / name for name in sorted(source.SCREENSHOTS))
     manifest = "SHA256SUMS.fedora" if args.platform == "fedora" else "SHA256SUMS"
     (args.directory / manifest).write_text("".join(

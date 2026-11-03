@@ -23,8 +23,18 @@
 
 Для Arizona UMU получает отдельный GAMEID (`umu-alolarizona`, в разработке
 `umu-alolarizonadev`), чтобы не использовать общий класс `steam_app_default`.
-Скрытые записи связывают эти окна и известные имена Wine-лаунчера с иконкой ALOL.
+Скрытые записи связывают эти окна и известные имена Wine-лаунчера с отдельной
+оранжевой иконкой AZ. Фиолетовая иконка ALOL остаётся у нашего приложения.
+Иконка Arizona встроена в бинарник и поддерживается в пользовательской папке
+иконок, в том числе после self-update. Рабочая копия не меняет Exec существующих
+desktop-записей установленного лаунчера.
 Чужие пользовательские desktop-записи не перезаписываются.
+
+При проверке значков на COSMIC учитывайте кэш процесса `cosmic-toplevel`:
+он читает desktop-записи при старте. Успешная запись нового Icon в файл сама
+по себе не подтверждает обновление значка в уже запущенном переключателе окон.
+ALOL не завершает процессы оболочки автоматически. После изменения метаданных
+проверяйте значок в новой графической сессии либо отдельно обновите сервис поиска.
 
 ## Проверка изменений
 
@@ -37,6 +47,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/mods_integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/game_integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/update_integration.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/proton_runtime.py
 ```
 
 Интеграционные тесты используют временные каталоги и подставные Windows-runner/API;
@@ -98,8 +109,9 @@ Arch-сборка также экспортирует отдельный `alol-V
 Для готового чистого Git-коммита и тега текущей версии команда
 `./scripts/publish.sh` повторяет проверку, публикует репозиторий и GitHub Release.
 Нужны авторизованный `gh` и доступ к GitHub. Скрипт не использует force push.
-После загрузки основных файлов он запускает workflow `Fedora RPM`, ждёт сборку
-и скачивает проверенный RPM. Для добавления workflow OAuth-токену GitHub CLI
+Сначала создаётся черновик релиза с исходниками, пакетами и проверенным архивом
+исправления ALOL-Proton. Workflow `Fedora RPM` получает исходники через временный
+`GITHUB_TOKEN`, проверяет RPM; затем релиз становится публичным. Для добавления workflow OAuth-токену GitHub CLI
 может понадобиться scope `workflow`: если GitHub отклонит push по этой причине,
 выполните `gh auth refresh -h github.com -s workflow` и повторите публикацию.
 Сам токен в файлы проекта или GitHub Actions secrets не копируется: workflow

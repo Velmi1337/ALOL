@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Process tests for reversible mods and untrusted archives, with official-shaped API fixtures."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,8 @@ class Mods(unittest.TestCase):
         self.game=self.prefix/'drive_c/Arizona Games Launcher/bin/arizona'
         self.game.mkdir(parents=True)
         (self.game/'gta_sa.exe').write_bytes(b'original game')
+        for name in ('MoonLoader.asi', 'CLEO.asi', 'modloader.asi'):
+            (self.game/name).write_bytes(b'existing loader fixture')
         self.native=self.prefix/'drive_c/users/steamuser/AppData/Roaming/arizona-launcher/settings.json'
         self.native.parent.mkdir(parents=True)
         self.native.write_text(json.dumps({'arizona':{'gamePath':r'C:\Arizona Games Launcher\bin\arizona'},'preserve':{'setting':123}}))
@@ -84,6 +87,99 @@ shutil.copyfile(mapping[url],args[args.index('--output')+1])
         self.add(package)
         self.assertEqual((self.game/'moonloader/мой.lua').read_bytes(),b'lua')
         self.assertFalse(list(self.game.rglob('*:Zone.Identifier')))
+
+    def test_mixed_archive_routes_each_file_and_bundled_lua_dependencies(self):
+        package=self.archive('bundle.zip',{
+            'Pack/mod.lua':b"local events = require 'samp.events'",
+            'Pack/lib/samp/events.lua':b"local x = require 'helper'",
+            'Pack/lib/helper.lua':b'return {}',
+            'Pack/lib/native.dll':b'library',
+            'Pack/config/mod/settings.ini':b'options',
+            'Pack/extra.asi':b'ASI plugin',
+            'Pack/extra.ini':b'ASI options',
+            'Pack/script.cs':b'CLEO script',
+            'Pack/script.ini':b'CLEO options',
+            'README.txt':b'install instructions',
+        })
+        self.add(package)
+        for relative in ('moonloader/mod.lua','moonloader/lib/samp/events.lua','moonloader/lib/helper.lua',
+                         'moonloader/lib/native.dll','moonloader/config/mod/settings.ini','extra.asi','extra.ini','cleo/script.cs','cleo/script.ini'):
+            self.assertTrue((self.game/relative).is_file(),relative)
+        self.assertFalse((self.game/'README.txt').exists())
+        self.assertFalse((self.game/'lib').exists())
+
+    def test_compiled_script_preview_does_not_execute_or_install(self):
+        package=self.archive('compiled.zip',{'mod.luac':b'\x1bLJ\x02binary', 'lib/native.dll':b'library', 'config/mod.ini':b'config'})
+        before={p.relative_to(self.game):p.read_bytes() for p in self.game.rglob('*') if p.is_file()}
+        native=self.native.read_bytes()
+        result=self.run_alol('mods-preview',arguments=(package,))
+        self.assertIn('скомпилированный Lua',result.stdout)
+        self.assertIn('moonloader/lib',result.stdout)
+        self.assertEqual(self.states(),[])
+        self.assertEqual(self.native.read_bytes(),native)
+        self.assertEqual({p.relative_to(self.game):p.read_bytes() for p in self.game.rglob('*') if p.is_file()},before)
+
+    def test_missing_lua_library_is_reported_before_installation(self):
+        package=self.archive('missing.zip',{'mod.lua':b"require 'nonexistent.lib'"})
+        result=self.add(package,success=False)
+        self.assertIn('nonexistent.lib',result.stdout)
+        self.assertFalse((self.game/'moonloader/mod.lua').exists())
+        self.assertEqual(self.states(),[])
+
+    def test_nested_dependencies_archive_is_unpacked_and_conflicts_are_rejected(self):
+        buffer=io.BytesIO()
+        with zipfile.ZipFile(buffer,'w') as z: z.writestr('lib/helper.lua',b'return {}')
+        package=self.archive('nested.zip',{'mod.lua':b"require 'helper'",'dependencies/libs.zip':buffer.getvalue()})
+        self.add(package)
+        self.assertEqual((self.game/'moonloader/lib/helper.lua').read_bytes(),b'return {}')
+        self.assertFalse(list(self.game.rglob('*.zip')))
+        bad=self.archive('conflict.zip',{'mod.lua':b"require 'helper'",'lib/helper.lua':b'other','deps/lib.zip':buffer.getvalue()})
+        self.add(bad,success=False)
+        self.assertEqual((self.game/'moonloader/lib/helper.lua').read_bytes(),b'return {}')
+
+    def test_ambiguous_configuration_and_excessive_nested_archives_do_not_install(self):
+        package=self.archive('ambiguous.zip',{'a.lua':b'-- Lua','b.asi':b'ASI','options.ini':b'unknown owner'})
+        self.add(package,success=False)
+        self.assertFalse((self.game/'moonloader/a.lua').exists())
+        buffer=io.BytesIO()
+        with zipfile.ZipFile(buffer,'w'): pass
+        package=self.archive('nested-limit.zip',{'mod.asi':b'plugin',**{f'deps/{i}.zip':buffer.getvalue() for i in range(65)}})
+        self.add(package,success=False)
+        self.assertFalse((self.game/'mod.asi').exists())
+
+    def test_identical_shared_library_is_reused_and_owner_cannot_be_removed_first(self):
+        a=self.archive('first.zip',{'a.lua':b"require 'shared'",'lib/shared.lua':b'return {}'})
+        b=self.archive('second.zip',{'b.lua':b"require 'shared'",'lib/shared.lua':b'return {}'})
+        self.add(a);first=self.states()[0]['id']
+        self.add(b);second=next(v['id'] for v in self.states() if v['id']!=first)
+        self.run_alol('mods-disable',success=False,arguments=(first,))
+        self.assertTrue((self.game/'moonloader/lib/shared.lua').is_file())
+        self.run_alol('mods-remove',arguments=(second,))
+        self.run_alol('mods-remove',arguments=(first,))
+        self.assertFalse((self.game/'moonloader/lib/shared.lua').exists())
+
+    def test_installer_in_auto_archive_is_not_run_or_copied(self):
+        package=self.archive('installer.zip',{'mod.asi':b'plugin','setup.exe':b'installer'})
+        self.add(package,success=False)
+        self.assertFalse((self.game/'mod.asi').exists())
+        self.assertFalse((self.game/'setup.exe').exists())
+
+    def test_missing_loader_is_installed_from_official_hashed_catalog(self):
+        (self.game/'MoonLoader.asi').unlink()
+        content=b'official loader'
+        catalog={'mods':[{'id':7,'name':'MoonLoader','version':26}]}
+        manifest={'data':[{'name':'MoonLoader.asi','type':'file','size':len(content),'hash':hashlib.sha256(content).hexdigest()}]}
+        self.fixture_api(catalog,manifest,content)
+        fixtures=Path(self.env['ALOL_TEST_HTTP']); mapping=json.loads(fixtures.read_text())
+        mapping['https://pc.az-ins.com/resource/mods/7/MoonLoader.asi']=str(self.root/'payload.bin')
+        fixtures.write_text(json.dumps(mapping))
+        package=self.archive('needs-loader.zip',{'mod.lua':b'-- sample'})
+        self.add(package)
+        self.assertEqual((self.game/'MoonLoader.asi').read_bytes(),content)
+        self.assertEqual(len(self.states()),2)
+        dependent=next(v for v in self.states() if v['id']!='official-7')
+        self.assertIn('official-7',dependent['depends_on'])
+        self.run_alol('mods-remove',success=False,arguments=('official-7',))
 
     def test_archives_cannot_escape_game_or_add_links(self):
         for name,member in [('escape.zip','../outside.asi'),('windows.zip','C:\\escape.asi')]:

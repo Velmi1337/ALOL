@@ -14,13 +14,13 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 TOP_LEVEL = (
-    "Cargo.toml", "Cargo.lock", "LICENSE", "NOTICE", "README.md", "CHANGELOG.md",
+    "Cargo.toml", "Cargo.lock", "LICENSE", "NOTICE", "README.md", "README_EN.md", "CHANGELOG.md",
     ".gitignore", ".gitattributes", "install.sh", "install-arch.sh", "install-fedora.sh", "run-dev.sh",
 )
-DIRECTORIES = ("src", "assets", "docs", "tests", "packaging", "scripts", ".github")
-EXTENSIONS = {".rs", ".py", ".sh", ".md", ".json", ".svg", ".desktop", ".in", ".png", ".yml"}
+DIRECTORIES = ("src", "assets", "docs", "tests", "packaging", "scripts", "runtime", ".github")
+EXTENSIONS = {".rs", ".py", ".sh", ".md", ".json", ".svg", ".desktop", ".in", ".png", ".yml", ".patch"}
 SCREENSHOTS = {"docs/screenshots/main.png", "docs/screenshots/settings.png", "docs/screenshots/mods.png"}
-ICONS = {"assets/alol.png"}
+ICONS = {"assets/alol.png", "assets/arizona.png"}
 SECRETS = re.compile(rb"(?:/home/[A-Za-z0-9_.-]+|/Users/[A-Za-z0-9_.-]+|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----)")
 
 
@@ -75,7 +75,7 @@ def audit_png(name, data):
     if not ended or header is None:
         raise ValueError(f"Incomplete screenshot: {name}")
     width, height, depth, color, compression, filtering, interlace = header
-    icon = name.endswith("assets/alol.png") or name.endswith("apps/alol.png")
+    icon = any(name.endswith(path) for path in ("assets/alol.png", "assets/arizona.png", "apps/alol.png"))
     dimensions = (width == 256 and height == 256) if icon else (640 <= width <= 4096 and 480 <= height <= 4096)
     if not (dimensions and depth == 8
             and color in (2, 6) and (compression, filtering, interlace) == (0, 0, 0)):

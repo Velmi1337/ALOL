@@ -1,0 +1,24 @@
+{
+  "runtime_name": "ALOL-Proton-0.1.0-x86_64",
+  "profile_version": "0.1.0",
+  "architecture": "x86_64",
+  "base_tag": "GE-Proton11-11",
+  "upstream_root": "GE-Proton11-11-x86_64",
+  "base_filename": "GE-Proton11-11-x86_64.tar.gz",
+  "base_size": 564789552,
+  "base_sha256": "aa85986cada5709aa8bbfa8add7f3bfb925cbe15710c98995898d308ff2ca3c1",
+  "base_url": "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton11-11/GE-Proton11-11-x86_64.tar.gz",
+  "source_url": "https://github.com/GloriousEggroll/proton-ge-custom/tree/GE-Proton11-11",
+  "engine_patched": true,
+  "engine_files": {
+    "files/lib/wine/i386-windows/user32.dll": "9dbb86e3e41717d74348f70d7aa9456e192dfb46f649b5f6ce0ca6ba6ba1db0a",
+    "files/lib/wine/x86_64-windows/user32.dll": "ec58bfa70643ae92b85d105d270d11fea8ce662571398a2f368a513c4c426c50"
+  },
+  "source_bundle_sha256": "2dd4c6dd1e49db491fdbd2d34be4bbf9269655b2f37b643984467665f53d249c",
+  "wine_commit": "c53678ab22a85f0fad3588dd34f0452a463bd015",
+  "keyboard_patch_sha256": "0ad3849f2e25c8a0c777849b54e43402896ca9771844d78b0df3bb90fce62e4a",
+  "overlay_filename": "alol-proton-0.1.0-keyboard-overlay.tar.gz",
+  "overlay_size": 74334740,
+  "overlay_sha256": "ee94758e1739ce1ab846907fc0214bccb2a7f5ad38bb6fa59c659c9b7e32d51e",
+  "overlay_url": "https://github.com/Velmi1337/ALOL/releases/download/v0.5.8/alol-proton-0.1.0-keyboard-overlay.tar.gz"
+}

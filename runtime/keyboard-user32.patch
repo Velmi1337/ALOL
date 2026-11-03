@@ -1,0 +1,98 @@
+--- a/dlls/user32/input.c
++++ b/dlls/user32/input.c
+@@ -297,6 +297,71 @@
+     return GetOEMCP();
+ }
+ 
++/* ALOL XKB indicator bridge, Copyright 2026 Velmi1337 and ALOL contributors.
++ * LGPL-2.1-or-later, like the surrounding Wine source. This changes queries,
++ * not key translation, user/system locale, the active HKL or the code pages.
++ * ALOL owns a four-byte, read-only-to-Wine mapping for this game session.
++ */
++static INIT_ONCE alol_keyboard_once = INIT_ONCE_STATIC_INIT;
++static const volatile DWORD *alol_keyboard_state;
++
++static BOOL CALLBACK alol_keyboard_init( INIT_ONCE *once, void *parameter, void **context )
++{
++    WCHAR path[32768];
++    HANDLE file, mapping;
++    DWORD length = GetEnvironmentVariableW( L"ALOL_KEYBOARD_STATE", path, ARRAY_SIZE(path) );
++    if (!length || length >= ARRAY_SIZE(path)) return TRUE;
++    file = CreateFileW( path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL );
++    if (file == INVALID_HANDLE_VALUE) return TRUE;
++    if (GetFileSize( file, NULL ) != sizeof(DWORD))
++    {
++        CloseHandle( file );
++        return TRUE;
++    }
++    mapping = CreateFileMappingW( file, NULL, PAGE_READONLY, 0, 0, NULL );
++    CloseHandle( file );
++    if (!mapping) return TRUE;
++    alol_keyboard_state = MapViewOfFile( mapping, FILE_MAP_READ, 0, 0, sizeof(DWORD) );
++    CloseHandle( mapping );
++    /* The view lives until process teardown; no handles or per-frame I/O. */
++    return TRUE;
++}
++
++static DWORD alol_keyboard_layout(void)
++{
++    DWORD layout;
++    InitOnceExecuteOnce( &alol_keyboard_once, alol_keyboard_init, NULL, NULL );
++    if (!alol_keyboard_state) return 0;
++    layout = *alol_keyboard_state; /* aligned atomic DWORD on x86/x86_64 */
++    if (LOWORD(layout) != HIWORD(layout)) return 0;
++    return layout;
++}
++
++HKL WINAPI ALOLGetKeyboardLayout( DWORD thread_id )
++{
++    DWORD layout = alol_keyboard_layout();
++    if (layout) return (HKL)(ULONG_PTR)layout;
++    return NtUserGetKeyboardLayout( thread_id );
++}
++
++BOOL WINAPI ALOLGetKeyboardLayoutNameW( WCHAR *name )
++{
++    static const WCHAR hex[] = L"0123456789ABCDEF";
++    DWORD layout = alol_keyboard_layout();
++    unsigned int i;
++    if (!layout) return NtUserGetKeyboardLayoutName( name );
++    if (!name)
++    {
++        SetLastError( ERROR_NOACCESS );
++        return FALSE;
++    }
++    layout = HIWORD(layout);
++    for (i = 0; i < 8; ++i) name[i] = hex[(layout >> (28 - 4 * i)) & 15];
++    name[8] = 0;
++    return TRUE;
++}
++
+ /****************************************************************************
+  *		GetKeyboardLayoutNameA (USER32.@)
+  */
+@@ -304,7 +369,7 @@
+ {
+     WCHAR buf[KL_NAMELENGTH];
+ 
+-    if (NtUserGetKeyboardLayoutName( buf ))
++    if (ALOLGetKeyboardLayoutNameW( buf ))
+         return WideCharToMultiByte( CP_ACP, 0, buf, -1, pszKLID, KL_NAMELENGTH, NULL, NULL ) != 0;
+     return FALSE;
+ }
+--- a/dlls/user32/user32.spec
++++ b/dlls/user32/user32.spec
+@@ -582,10 +582,10 @@
+ @ stdcall GetKeyNameTextA(long ptr long)
+ @ stdcall GetKeyNameTextW(long ptr long) NtUserGetKeyNameText
+ @ stdcall -import GetKeyState(long) NtUserGetKeyState
+-@ stdcall GetKeyboardLayout(long) NtUserGetKeyboardLayout
++@ stdcall GetKeyboardLayout(long) ALOLGetKeyboardLayout
+ @ stdcall GetKeyboardLayoutList(long ptr) NtUserGetKeyboardLayoutList
+ @ stdcall GetKeyboardLayoutNameA(ptr)
+-@ stdcall GetKeyboardLayoutNameW(ptr) NtUserGetKeyboardLayoutName
++@ stdcall GetKeyboardLayoutNameW(ptr) ALOLGetKeyboardLayoutNameW
+ @ stdcall -import GetKeyboardState(ptr) NtUserGetKeyboardState
+ @ stdcall GetKeyboardType(long)
+ @ stdcall GetLastActivePopup(long)

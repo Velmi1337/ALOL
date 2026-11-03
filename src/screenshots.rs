@@ -47,6 +47,7 @@ impl Demo {
             std::env::set_var("HOME", &home);
             std::env::set_var("XDG_CONFIG_HOME", demo.root.join("config"));
             std::env::set_var("XDG_DATA_HOME", demo.root.join("data"));
+            std::env::set_var("ALOL_DESKTOP_DATA_HOME", demo.root.join("data"));
             std::env::set_var("XDG_CACHE_HOME", demo.root.join("cache"));
             std::env::set_var("GTK_THEME", "Adwaita:dark");
         }

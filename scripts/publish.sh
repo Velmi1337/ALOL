@@ -41,11 +41,13 @@ alol_artifacts=("dist/alol-$alol_version-1-x86_64.pkg.tar.zst" \
     "dist/alol-$alol_version-linux-x86_64" \
     "dist/alol-$alol_version.tar.gz" dist/PKGBUILD dist/alol.spec dist/SHA256SUMS LICENSE NOTICE \
     docs/screenshots/main.png docs/screenshots/settings.png docs/screenshots/mods.png)
+alol_runtime_asset=$(python3 -c 'import json; print(json.load(open("runtime/base.json"))["overlay_filename"])')
+alol_artifacts+=("dist/$alol_runtime_asset")
 if gh release view "v$alol_version" --repo "$alol_repo" >/dev/null 2>&1; then
     gh release upload "v$alol_version" --repo "$alol_repo" --clobber "${alol_artifacts[@]}"
 else
     gh release create "v$alol_version" --repo "$alol_repo" --verify-tag \
-        --title "ALOL $alol_version" --notes-file docs/release-notes.md "${alol_artifacts[@]}"
+        --draft --title "ALOL $alol_version" --notes-file docs/release-notes.md "${alol_artifacts[@]}"
 fi
 printf '\nBuilding and testing the native Fedora RPM in GitHub Actions...\n'
 alol_dispatched_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -66,4 +68,5 @@ gh run watch "$alol_run" --repo "$alol_repo" --exit-status --interval 10
 gh release download "v$alol_version" --repo "$alol_repo" --dir dist --clobber \
     --pattern "alol-$alol_version-*.x86_64.rpm" --pattern SHA256SUMS.fedora
 python3 scripts/verify-fedora-download.py dist
+gh release edit "v$alol_version" --repo "$alol_repo" --draft=false --latest
 printf '\nPublished: https://github.com/%s/releases/tag/v%s\n' "$alol_repo" "$alol_version"

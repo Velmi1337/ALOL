@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Direct game launch tests: no Electron process, persisted profile and native flags."""
 import json
+import hashlib
 from pathlib import Path
 import unittest
 import integration as base
@@ -28,6 +29,64 @@ class DirectGame(unittest.TestCase):
 
     def game_calls(self):
         return [c for c in self.calls() if c['args'][0]==str(self.exe)]
+
+    def keyboard_runtime(self):
+        runtime = self.root/'keyboard-runtime'
+        runtime.mkdir()
+        (runtime/'proton').touch()
+        files = {}
+        for arch in ('i386','x86_64'):
+            relative = f'files/lib/wine/{arch}-windows/user32.dll'
+            path = runtime/relative
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b'compiled keyboard DLL fixture')
+            files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        (runtime/'alol-runtime.json').write_text(json.dumps(
+            {'keyboard_patch':{'protocol':'xkb-state-v1'},'recipe':{'engine_files':files}}))
+        self.write_config(proton=str(runtime))
+        return runtime
+
+    def test_keyboard_bridge_only_reaches_game_and_cleans_its_state(self):
+        self.keyboard_runtime()
+        self.run_alol('play',DISPLAY=':invalid-alol-test',ALOL_KEYBOARD_STATE='inherited-stale-state')
+        game = self.game_calls()[-1]
+        self.assertTrue(game['keyboard_state'].startswith('C:\\alol\\keyboard-state-'))
+        self.assertTrue(game['keyboard_state_exists'])
+        self.assertEqual(list((self.prefix/'drive_c/alol').glob('keyboard-state-*.bin')),[])
+        self.run_alol('launch',DISPLAY=':invalid-alol-test',ALOL_KEYBOARD_STATE='inherited-stale-state')
+        self.assertIsNone(self.calls()[-1]['keyboard_state'])
+
+    def test_damaged_keyboard_dll_stops_before_game_without_touching_it(self):
+        runtime = self.keyboard_runtime()
+        (runtime/'files/lib/wine/i386-windows/user32.dll').write_bytes(b'damaged DLL')
+        before = self.exe.read_bytes()
+        result = self.run_alol('play',success=False,DISPLAY=':invalid-alol-test')
+        self.assertIn('повреждён',result.stderr)
+        self.assertEqual(self.game_calls(),[])
+        self.assertEqual(self.exe.read_bytes(),before)
+
+    def test_keyboard_patch_without_x11_preserves_native_wayland_fallback(self):
+        self.keyboard_runtime()
+        self.run_alol('play',DISPLAY='',WAYLAND_DISPLAY='wayland-test')
+        self.assertIsNone(self.game_calls()[-1]['keyboard_state'])
+        self.assertEqual(self.game_calls()[-1]['wayland'],'wayland-test')
+
+    def test_keyboard_alias_uses_only_runtime_in_selected_profile(self):
+        runtime = self.keyboard_runtime()
+        selected = self.data/'alol/runtimes/ALOL-Proton-0.1.0-kbd1-x86_64'
+        selected.parent.mkdir(parents=True)
+        runtime.rename(selected)
+        self.write_config(proton='ALOL-Proton-Keyboard')
+        self.run_alol('play',DISPLAY=':invalid-alol-test')
+        self.assertEqual(self.game_calls()[-1]['proton'],str(selected))
+        self.assertTrue(self.game_calls()[-1]['keyboard_state_exists'])
+
+    def test_keyboard_patch_with_native_input_does_not_report_xwayland_state(self):
+        self.keyboard_runtime()
+        self.write_config(proton=self.settings['proton'],input_compatibility='false')
+        self.run_alol('play',DISPLAY=':invalid-alol-test',WAYLAND_DISPLAY='wayland-test',PROTON_ENABLE_WAYLAND='1')
+        self.assertIsNone(self.game_calls()[-1]['keyboard_state'])
+        self.assertEqual(self.game_calls()[-1]['wayland'],'wayland-test')
 
     def test_imports_nickname_and_server_and_launches_game_without_electron(self):
         before=len(self.calls())
@@ -82,9 +141,20 @@ class DirectGame(unittest.TestCase):
 
     def test_game_watch_cleans_new_metadata_in_actual_game_directory(self):
         sidecar=self.game/'fontcustom/game.ttf:Zone.Identifier'
-        self.run_alol('play',ALOL_TEST_DROP_ZONE=str(sidecar))
+        self.run_alol('play',ALOL_TEST_DROP_ZONE=str(sidecar),ALOL_TEST_ASSERT_ZONE_CLEANED='1')
         self.assertFalse(sidecar.exists())
         self.assertEqual(len(list((self.data/'alol/backups/zone-identifiers').rglob('game.ttf:Zone.Identifier'))),1)
+
+    def test_game_watch_falls_back_to_polling_if_inotify_is_unavailable(self):
+        import shutil,subprocess
+        compiler=shutil.which('cc')
+        if not compiler:self.skipTest('C compiler required for inotify failure injection')
+        library=self.root/'no-inotify.so'
+        code='#include <errno.h>\nint inotify_init1(int flags) { errno=38; return -1; }\n'
+        subprocess.run([compiler,'-shared','-fPIC','-x','c','-','-o',str(library)],input=code,text=True,check=True,capture_output=True)
+        sidecar=self.game/'fontcustom/fallback.ttf:Zone.Identifier'
+        self.run_alol('play',LD_PRELOAD=str(library),ALOL_TEST_DROP_ZONE=str(sidecar),ALOL_TEST_ASSERT_ZONE_CLEANED='1')
+        self.assertFalse(sidecar.exists())
 
     def test_alternative_native_game_executable_priority(self):
         alternative=self.game/'enb.exe';alternative.write_bytes(b'provided game wrapper')
@@ -141,6 +211,50 @@ class DirectGame(unittest.TestCase):
         count=len(self.calls());before=self.native.read_bytes()
         self.run_alol('play',success=False)
         self.assertEqual(len(self.calls()),count);self.assertEqual(self.native.read_bytes(),before)
+
+    def test_fps_display_preserves_graphics_sync_and_legacy_settings_are_ignored(self):
+        self.write_config(fps_hud='true',alt_tab='true',fps_limit='60',game_vsync='off')
+        self.run_alol('play',DXVK_CONFIG='user configuration',DXVK_FRAME_RATE='123',DXVK_HUD='devinfo')
+        call=self.game_calls()[-1]
+        self.assertEqual(call['dxvk_config'],'user configuration')
+        self.assertEqual(call['dxvk_frame_rate'],'123')
+        self.assertEqual(call['dxvk_hud'],'devinfo,fps,frametimes')
+        self.assertIn('-modern_scale',call['args'])
+        self.assertFalse(next(o for o in json.loads(self.native.read_text())['arizona']['options'] if o['id']=='windowed')['value'])
+        self.write_config(wined3d='true',fps_hud='true')
+        self.run_alol('play',DXVK_HUD='devinfo')
+        self.assertEqual(self.game_calls()[-1]['dxvk_hud'],'devinfo')
+
+    def test_game_mode_wraps_only_game_without_modifying_graphics(self):
+        trace=self.root/'gamemode-calls'
+        wrapper=self.bin/'gamemoderun'
+        wrapper.write_text('#!/usr/bin/python3\nimport os,sys,pathlib\np=pathlib.Path(os.environ["ALOL_GAME_MODE_TRACE"]);p.write_text("started")\nos.execvp(sys.argv[1],sys.argv[1:])\n')
+        wrapper.chmod(0o755)
+        self.write_config(game_mode='true')
+        options=self.root/'config/alol/game-options.json'
+        config={'memory':3072,'options':{'windowed':False,'wideScreen':True,'newGraphics':True,'grass':True}}
+        options.write_text(json.dumps(config))
+        self.run_alol('play',ALOL_GAME_MODE_TRACE=str(trace),DXVK_CONFIG='custom',DXVK_FRAME_RATE='144')
+        self.assertTrue(trace.exists())
+        saved=json.loads(options.read_text())
+        self.assertEqual(saved['memory'],config['memory'])
+        for key,value in config['options'].items(): self.assertEqual(saved['options'][key],value)
+        call=self.game_calls()[-1]
+        self.assertIn('-trees_new',call['args']);self.assertIn('-enable_grass',call['args'])
+        self.assertNotIn('-t',call['args'])
+        self.assertEqual(call['dxvk_config'],'custom');self.assertEqual(call['dxvk_frame_rate'],'144')
+        trace.unlink()
+        self.run_alol('launch',ALOL_GAME_MODE_TRACE=str(trace))
+        self.assertFalse(trace.exists())
+        self.write_config(game_mode='false')
+        self.run_alol('play',ALOL_GAME_MODE_TRACE=str(trace))
+        self.assertFalse(trace.exists())
+
+    def test_missing_game_mode_is_nonfatal(self):
+        self.write_config(game_mode='true')
+        # The fixture PATH deliberately has no GameMode. ALOL must still launch.
+        self.run_alol('play')
+        self.assertEqual(len(self.game_calls()),1)
 
     def test_input_compatibility_bypasses_ime_and_uses_real_xwayland_socket(self):
         original = self.native.read_bytes()

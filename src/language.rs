@@ -79,6 +79,9 @@ pub fn configure(command: &mut Command) {
     command
         .env("LANG", RUSSIAN)
         .env("LC_ALL", RUSSIAN)
+        // Proton replaces LC_ALL with HOST_LC_ALL (or removes it). Keep an
+        // inherited LC_CTYPE=C.UTF-8 from silently restoring ACP 1252 in UMU.
+        .env("HOST_LC_ALL", RUSSIAN)
         .env("LANGUAGE", "ru_RU:ru");
     if let Some(path) = PRIVATE.get_or_init(private_locale) {
         command.env("LOCPATH", path);

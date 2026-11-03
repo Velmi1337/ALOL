@@ -2,7 +2,10 @@ use std::{
     env, fs,
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    os::{fd::AsRawFd, unix::fs::PermissionsExt},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{MetadataExt, PermissionsExt},
+    },
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicBool, Ordering},
@@ -56,6 +59,8 @@ pub struct Settings {
     pub no_sync: bool,
     pub launcher_compatibility: bool,
     pub input_compatibility: bool,
+    pub fps_hud: bool,
+    pub game_mode: bool,
     pub update_policy: String,
     pub update_notifications: bool,
 }
@@ -81,6 +86,8 @@ impl Default for Settings {
             no_sync: false,
             launcher_compatibility: true,
             input_compatibility: true,
+            fps_hud: false,
+            game_mode: false,
             update_policy: "startup".into(),
             update_notifications: true,
         }
@@ -119,6 +126,8 @@ impl Settings {
                 "no_sync" => self.no_sync = v == "true",
                 "launcher_compatibility" => self.launcher_compatibility = v == "true",
                 "input_compatibility" => self.input_compatibility = v == "true",
+                "fps_hud" => self.fps_hud = v == "true",
+                "game_mode" => self.game_mode = v == "true",
                 "update_policy" => self.update_policy = v.into(),
                 "update_notifications" => self.update_notifications = v == "true",
                 _ => (),
@@ -158,10 +167,13 @@ impl Settings {
         }
         if self.proton != "GE-Proton"
             && self.proton != "UMU-Proton"
+            && self.proton != "ALOL-Proton"
+            && self.proton != "ALOL-Proton-Keyboard"
             && !Path::new(&self.proton).is_absolute()
         {
             return Err(
-                "Proton: выберите GE-Proton, UMU-Proton или абсолютный путь к сборке".into(),
+                "Proton: выберите GE-Proton, UMU-Proton, ALOL-Proton, ALOL-Proton-Keyboard или абсолютный путь к сборке"
+                    .into(),
             );
         }
         if self.wine.is_empty() {
@@ -183,7 +195,7 @@ impl Settings {
         let path = config_file();
         fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
         let text = format!(
-            "# ALOL — пути записываются без кавычек\nrunner={}\nproton={}\nwine={}\ninstaller={}\nexecutable={}\nprefix_root={}\nwined3d={}\ndisable_gpu={}\ndiscrete_gpu={}\ndebug={}\nno_sync={}\nlauncher_compatibility={}\ninput_compatibility={}\nupdate_policy={}\nupdate_notifications={}\n",
+            "# ALOL — пути записываются без кавычек\nrunner={}\nproton={}\nwine={}\ninstaller={}\nexecutable={}\nprefix_root={}\nwined3d={}\ndisable_gpu={}\ndiscrete_gpu={}\ndebug={}\nno_sync={}\nlauncher_compatibility={}\ninput_compatibility={}\nfps_hud={}\ngame_mode={}\nupdate_policy={}\nupdate_notifications={}\n",
             self.runner,
             self.proton,
             self.wine,
@@ -197,6 +209,8 @@ impl Settings {
             self.no_sync,
             self.launcher_compatibility,
             self.input_compatibility,
+            self.fps_hud,
+            self.game_mode,
             self.update_policy,
             self.update_notifications
         );
@@ -254,10 +268,47 @@ impl Settings {
             {
                 return Err("В выбранной папке Proton нет файла proton".into());
             }
-            let mut c = Command::new("umu-run");
-            c.env("PROTONPATH", &self.proton)
+            let mut c = self.runner_command("umu-run", executable);
+            let proton = if self.proton == "ALOL-Proton-Keyboard" {
+                crate::keyboard::installed()?.to_string_lossy().into_owned()
+            } else if self.proton == "ALOL-Proton" {
+                crate::alol_proton::installed()?
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                self.proton.clone()
+            };
+            c.env("PROTONPATH", proton)
                 .env("GAMEID", crate::desktop::arizona_game_id())
-                .env("STORE", "none");
+                .env("STORE", "none")
+                .env(
+                    "ALOL_TARGET_KIND",
+                    if is_game(executable) {
+                        "game"
+                    } else if !self.installer.is_empty() && executable == self.installer {
+                        "installer"
+                    } else if self.is_launcher(executable) {
+                        "launcher"
+                    } else {
+                        "helper"
+                    },
+                )
+                .env(
+                    "ALOL_COMPAT_INPUT",
+                    if self.input_compatibility { "1" } else { "0" },
+                )
+                .env(
+                    "ALOL_COMPAT_LAUNCHER",
+                    if self.launcher_compatibility {
+                        "1"
+                    } else {
+                        "0"
+                    },
+                )
+                .env(
+                    "ALOL_LAUNCHER_DISABLE_GPU",
+                    if self.disable_gpu { "1" } else { "0" },
+                );
             // Never run an arbitrary inherited Proton verb such as destroyprefix.
             c.env("PROTON_VERB", "waitforexitandrun");
             c
@@ -268,7 +319,7 @@ impl Settings {
                     self.wine
                 ));
             }
-            Command::new(&self.wine)
+            self.runner_command(&self.wine, executable)
         };
         crate::language::configure(&mut c);
         c.env("WINEPREFIX", self.prefix())
@@ -277,6 +328,7 @@ impl Settings {
             .env_remove("WINESERVER")
             .env_remove("ALOL_LOGIN_FILE")
             .env_remove("ALOL_LOGIN_TOKEN")
+            .env_remove("ALOL_KEYBOARD_STATE")
             .env(
                 "WINEDEBUG",
                 if self.debug {
@@ -307,6 +359,9 @@ impl Settings {
         if self.input_compatibility && (is_game(executable) || self.is_launcher(executable)) {
             input_environment(&mut c);
         }
+        if is_game(executable) {
+            crate::game_options::configure_hud(self, &mut c);
+        }
         c.arg(executable).args(args);
         if matches!(executable, WINEBOOT | REG | WINECFG) {
             // UMU preserves Windows paths, so Proton runs this real builtin rather
@@ -320,6 +375,20 @@ impl Settings {
             c.current_dir(path.parent().unwrap());
         }
         Ok(c)
+    }
+
+    fn runner_command(&self, runner: &str, executable: &str) -> Command {
+        if self.game_mode && is_game(executable) {
+            if available("gamemoderun") {
+                let mut command = Command::new("gamemoderun");
+                command.arg(runner);
+                return command;
+            }
+            eprintln!(
+                "GameMode не установлен: запуск игры без него. Для включения установите пакет gamemode средствами дистрибутива."
+            );
+        }
+        Command::new(runner)
     }
 
     fn is_launcher(&self, executable: &str) -> bool {
@@ -490,6 +559,7 @@ pub fn proton_versions() -> Vec<PathBuf> {
         home().join(".steam/steam/compatibilitytools.d"),
         xdg("XDG_DATA_HOME", ".local/share").join("umu/compatibilitytools"),
         PathBuf::from("/usr/share/steam/compatibilitytools.d"),
+        data_dir().join("runtimes"),
     ] {
         if let Ok(entries) = fs::read_dir(base) {
             for e in entries.flatten() {
@@ -599,6 +669,18 @@ fn run_managed(
         s.prefix().display()
     );
     let mut command = s.command(executable, args)?;
+    // Only the separately built keyboard runtime consumes this optional bridge.
+    let mut keyboard = if is_game(executable) {
+        crate::keyboard::LayoutSync::start(s, &mut command)?
+    } else {
+        None
+    };
+    if TERMINATED.load(Ordering::Relaxed) {
+        return Err("Операция остановлена".into());
+    }
+    let mut file_watch = watch_game
+        .as_ref()
+        .and_then(|game| crate::file_watch::ZoneWatch::new(game).ok());
     if TERMINATED.load(Ordering::Relaxed) {
         return Err("Операция остановлена".into());
     }
@@ -607,14 +689,39 @@ fn run_managed(
         .map_err(|e| format!("Не удалось запустить процесс: {e}"))?;
     let status = if let Some(game) = watch_game {
         let mut next_check = Instant::now();
+        let mut retry_watch = Instant::now() + Duration::from_secs(30);
         let mut reported_error = false;
+        let mut pending_scan = true;
         loop {
+            if let Some(keyboard) = &mut keyboard {
+                keyboard.check();
+            }
             if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                if !TERMINATED.load(Ordering::Relaxed)
+                    && let Err(e) = backup_zone_identifiers_at(&game)
+                {
+                    eprintln!("Не удалось обработать метки Windows после завершения: {e}");
+                }
                 break status;
             }
-            if !TERMINATED.load(Ordering::Relaxed) && Instant::now() >= next_check {
-                // Updates in the official launcher can introduce new Windows ADS sidecars.
-                // Keep checking while it runs, including the initial game download.
+            if let Some(watch) = &mut file_watch {
+                match watch.changed() {
+                    Ok(changed) => pending_scan |= changed,
+                    Err(_) => {
+                        file_watch = None;
+                        pending_scan = true;
+                    }
+                }
+            } else {
+                pending_scan = true;
+                if Instant::now() >= retry_watch {
+                    file_watch = crate::file_watch::ZoneWatch::new(&game).ok();
+                    retry_watch = Instant::now() + Duration::from_secs(30);
+                }
+            }
+            if !TERMINATED.load(Ordering::Relaxed) && pending_scan && Instant::now() >= next_check {
+                // An idle local game tree needs no periodic walk. Coalesce download
+                // events; if inotify is unavailable/lost, preserve the old polling.
                 if let Err(e) = backup_zone_identifiers_at(&game) {
                     if !reported_error {
                         eprintln!("Не удалось обработать метки Windows: {e}");
@@ -622,6 +729,7 @@ fn run_managed(
                     }
                 } else {
                     reported_error = false;
+                    pending_scan = false;
                 }
                 next_check = Instant::now() + Duration::from_secs(2);
             }
@@ -650,6 +758,7 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
     }
     if ![
         "doctor",
+        "runtime-prepare",
         "prepare",
         "install",
         "launch",
@@ -661,11 +770,13 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
         "mods-refresh",
         "mods-install",
         "mods-add",
+        "mods-preview",
         "mods-enable",
         "mods-disable",
         "mods-remove",
         "libraries",
         "reset-game",
+        "clean-cache",
         "winecfg",
     ]
     .contains(&action)
@@ -673,6 +784,12 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
         return Err(format!("Неизвестная команда: {action}. См. alol --help"));
     }
     let s = Settings::load()?;
+    if action == "runtime-prepare" {
+        if args.iter().any(|a| a != "--select") {
+            return Err("runtime-prepare принимает только --select".into());
+        }
+        return crate::alol_proton::prepare(&s, args.iter().any(|a| a == "--select"));
+    }
     if matches!(action, "launch" | "play")
         && let Err(error) = crate::desktop::integrate_arizona()
     {
@@ -689,6 +806,9 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
         return crate::game::refresh_servers();
     }
     let _lock = PrefixLock::acquire(&s.prefix())?;
+    if action == "mods-preview" {
+        return crate::mods::execute(&s, action, args);
+    }
     crate::game::cleanup_legacy(&s)?;
     fs::create_dir_all(data_dir().join("logs")).map_err(|e| e.to_string())?;
     println!(
@@ -811,6 +931,12 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
             );
         }
         "libraries" => ensure_components(&resolved_settings(&s))?,
+        "clean-cache" => {
+            let n = backup_caches(&s)?;
+            println!(
+                "Сброшено папок кэша Arizona: {n}. Старый кэш сохранён рядом в .alol-backup. Настройки, моды и кэш шейдеров не затронуты. Это восстановление интерфейса, а не увеличение FPS."
+            );
+        }
         "repair-language" => ensure_language(&resolved_settings(&s), true)?,
         "repair-game" => {
             let n = backup_zone_identifiers(&s)?;
@@ -840,6 +966,9 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
 }
 
 fn prepare(s: &Settings) -> Result<()> {
+    if s.runner == "proton" && s.proton == "ALOL-Proton" {
+        crate::alol_proton::prepare(s, false)?;
+    }
     // createprefix is UMU's empty-EXE sentinel: it initializes the prefix but
     // returns a Wine launch error. Use a real builtin and require its success.
     run(s, WINEBOOT, &["-u"])?;
@@ -1212,7 +1341,11 @@ pub fn open_log() -> Result<File> {
 }
 
 pub fn tail_log() -> String {
-    let Ok(mut f) = File::open(log_file()) else {
+    tail_log_at(&log_file())
+}
+
+fn tail_log_at(path: &Path) -> String {
+    let Ok(mut f) = File::open(path) else {
         return "Здесь появится журнал операций.".into();
     };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
@@ -1222,9 +1355,62 @@ pub fn tail_log() -> String {
     String::from_utf8_lossy(&bytes).replace('\0', "")
 }
 
+#[derive(PartialEq, Eq)]
+struct LogStamp {
+    device: u64,
+    inode: u64,
+    length: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+#[derive(Default)]
+pub struct LogTail {
+    stamp: Option<LogStamp>,
+    initialized: bool,
+}
+impl LogTail {
+    pub fn changed(&mut self) -> Option<String> {
+        self.changed_at(&log_file())
+    }
+    fn changed_at(&mut self, path: &Path) -> Option<String> {
+        let stamp = fs::metadata(path).ok().map(|m| LogStamp {
+            device: m.dev(),
+            inode: m.ino(),
+            length: m.len(),
+            modified: (m.mtime(), m.mtime_nsec()),
+            changed: (m.ctime(), m.ctime_nsec()),
+        });
+        if self.initialized && self.stamp == stamp {
+            return None;
+        }
+        self.initialized = true;
+        self.stamp = stamp;
+        Some(tail_log_at(path))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn log_tail_detects_append_truncation_rotation_and_missing_files() {
+        let root = temp();
+        let path = root.join("alol.log");
+        let mut reader = LogTail::default();
+        assert!(reader.changed_at(&path).is_some());
+        assert!(reader.changed_at(&path).is_none());
+        fs::write(&path, "first").unwrap();
+        assert_eq!(reader.changed_at(&path).as_deref(), Some("first"));
+        assert!(reader.changed_at(&path).is_none());
+        fs::write(&path, "second").unwrap();
+        assert_eq!(reader.changed_at(&path).as_deref(), Some("second"));
+        fs::rename(&path, root.join("old.log")).unwrap();
+        fs::write(&path, "rotated").unwrap();
+        assert_eq!(reader.changed_at(&path).as_deref(), Some("rotated"));
+        fs::write(&path, "").unwrap();
+        assert_eq!(reader.changed_at(&path).as_deref(), Some(""));
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn update_preferences_migrate_and_validate() {
         let mut settings = Settings::default();

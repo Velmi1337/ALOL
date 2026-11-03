@@ -7,6 +7,10 @@
 ALOL использует `umu-run`, а не запускает внутренний `files/bin/wine`
 из сборки Proton напрямую.
 
+Для разработки профиля Arizona доступен [экспериментальный ALOL-Proton](proton.md).
+Это отдельный пакет GE с нашим слоем запуска; собственных патчей Wine/DXVK и
+измеренного преимущества по FPS в первой версии нет.
+
 - [GE-Proton](https://github.com/GloriousEggroll/proton-ge-custom)
 - [UMU](https://github.com/Open-Wine-Components/umu-launcher)
 - [UMU FAQ](https://github.com/Open-Wine-Components/umu-launcher/wiki/Frequently-asked-questions-%28FAQ%29)
@@ -101,6 +105,11 @@ Wine `UseXIM=N`. Оверлеи и графические настройки и�
 COSMIC и не переназначает клавиши в GTA. Перед запуском выберите английскую
 раскладку; для IME или нативного Wayland можно отключить опцию и сохранить настройки.
 Конкретный периодический сбой WASD в игре на COSMIC ещё требует проверки игровым сеансом.
+
+Постоянное RU в индикаторе раскладки — отдельное ограничение `GetKeyboardLayout`
+в Wine. В ALOL 0.5.8 исправление включено в **ALOL-Proton 0.1.0**:
+[устройство, сборка и проверка](proton.md#профиль-arizona-и-клавиатура).
+Она сохраняет ru-RU и кодировки и меняет только ответы API для индикатора игры.
 
 Источники поведения:
 [Wine: запасная обработка LC_ALL](https://github.com/wine-mirror/wine/blob/master/dlls/ntdll/unix/env.c),
