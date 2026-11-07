@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 # Executed only inside the clean Fedora CI container, not on the developer's host.
-dnf install --assumeyes rpm-build rust cargo gcc gtk3-devel glib2-devel cairo-devel \
+dnf install --assumeyes rpm-build rust cargo gcc gtk3-devel fontconfig-devel glib2-devel cairo-devel \
     libarchive-devel python3 desktop-file-utils bsdtar shadow-utils util-linux git redhat-rpm-config
 useradd --create-home --home-dir /tmp/alol-builder builder
 cp -a /source /tmp/alol-builder/project

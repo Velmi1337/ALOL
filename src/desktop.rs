@@ -2,6 +2,7 @@
 use crate::{
     core::{self, Result},
     mods,
+    project::Project,
 };
 use std::{
     env, fs,
@@ -25,6 +26,60 @@ pub fn arizona_game_id() -> &'static str {
     } else {
         "umu-alolarizona"
     }
+}
+
+pub fn game_id(project: Project) -> &'static str {
+    match project {
+        Project::Arizona => arizona_game_id(),
+        Project::Rodina if development_copy() => "umu-alolrodinadev",
+        Project::Rodina => "umu-alolrodina",
+    }
+}
+
+pub fn integrate_game(project: Project) -> Result<()> {
+    if project == Project::Arizona {
+        return integrate_arizona();
+    }
+    let executable = development_root()
+        .map(|p| p.join("run-dev.sh"))
+        .or_else(|| env::current_exe().ok())
+        .ok_or("Не найден ALOL")?;
+    let icon_path = metadata_root().join("icons/hicolor/256x256/apps/alol-rodina.png");
+    let bytes: &[u8] = include_bytes!("../assets/rodina.png");
+    if fs::read(&icon_path).ok().as_deref() != Some(bytes) {
+        mods::atomic_bytes(&icon_path, bytes)?;
+    }
+    let class = format!("steam_app_{}", game_id(project).trim_start_matches("umu-"));
+    let entry = metadata_root()
+        .join("applications")
+        .join(format!("{class}.desktop"));
+    let previous = fs::read_to_string(&entry).ok();
+    if previous.as_ref().is_some_and(|text| {
+        !text
+            .lines()
+            .any(|line| line == "X-ALOL-WindowMetadata=true")
+    }) {
+        return Ok(());
+    }
+    let text = desktop_entry(&executable)?
+        .replace("Name=ALOL\n", "Name=Родина RP · ALOL\n")
+        .replace(
+            "Icon=alol\n",
+            &format!(
+                "Icon={}\n",
+                icon_path.to_string_lossy().replace('\\', "\\\\")
+            ),
+        )
+        .replace(
+            "StartupWMClass=alol\n",
+            &format!("StartupWMClass={class}\n"),
+        );
+    let text = text.replace("\nIcon=", " --project rodina launch\nIcon=")
+        + "NoDisplay=true\nX-ALOL-WindowMetadata=true\n";
+    if previous.as_deref() != Some(&text) {
+        mods::atomic_bytes(&entry, text.as_bytes())?;
+    }
+    Ok(())
 }
 
 fn metadata_root() -> PathBuf {

@@ -2,11 +2,11 @@
 pkgname=alol
 pkgver=@VERSION@
 pkgrel=1
-pkgdesc='Lightweight native Arizona RP launcher for Linux'
+pkgdesc='Arizona RP and Rodina RP for Linux with a Material 3 Expressive interface'
 arch=('x86_64')
 url='@REPOSITORY@'
-license=('Apache-2.0')
-depends=('gtk3' 'glib2' 'cairo' 'libarchive' 'curl' 'umu-launcher' 'polkit' 'glibc' 'gcc-libs')
+license=('Apache-2.0' 'OFL-1.1')
+depends=('gtk3' 'glib2' 'cairo' 'libarchive' 'curl' 'umu-launcher' 'polkit' 'glibc' 'gcc-libs' 'fontconfig')
 makedepends=('rust' 'python')
 checkdepends=('desktop-file-utils')
 optdepends=(
@@ -39,6 +39,7 @@ check() {
     PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/mods_integration.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/game_integration.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/project_integration.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/update_integration.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/proton_runtime.py
 }

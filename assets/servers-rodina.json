@@ -1,0 +1,55 @@
+{
+  "source": "https://api.arizona-five.com/launcher/servers",
+  "snapshot_date": "2026-11-06",
+  "rodina": [
+    {
+      "number": 4,
+      "name": "Восточный",
+      "ip": "eastern.rodina-rp.com",
+      "port": 7777,
+      "maxplayers": 1000
+    },
+    {
+      "number": 1,
+      "name": "Центральный",
+      "ip": "central.rodina-rp.com",
+      "port": 7777,
+      "maxplayers": 1000
+    },
+    {
+      "number": 3,
+      "name": "Северный",
+      "ip": "northern.rodina-rp.com",
+      "port": 8904,
+      "maxplayers": 1000
+    },
+    {
+      "number": 2,
+      "name": "Южный",
+      "ip": "southern.rodina-rp.com",
+      "port": 8904,
+      "maxplayers": 1000
+    },
+    {
+      "number": 6,
+      "name": "Приморский",
+      "ip": "primorsky.rodina-rp.com",
+      "port": 7777,
+      "maxplayers": 1000
+    },
+    {
+      "number": 7,
+      "name": "Федеральный",
+      "ip": "federal.rodina-rp.com",
+      "port": 7777,
+      "maxplayers": 1000
+    },
+    {
+      "number": 5,
+      "name": "Западный",
+      "ip": "western.rodina-rp.com",
+      "port": 7777,
+      "maxplayers": 1000
+    }
+  ]
+}

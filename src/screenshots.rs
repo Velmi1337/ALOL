@@ -65,6 +65,7 @@ impl Demo {
         .map_err(|e| e.to_string())?;
         fs::write(game.join("gta_sa.exe"), b"ALOL demo fixture").map_err(|e| e.to_string())?;
         PlayerProfile {
+            project: settings.project,
             server_id: "1".into(),
             nickname: "Nick_Name".into(),
             nicknames: BTreeMap::from([("1".into(), "Nick_Name".into())]),

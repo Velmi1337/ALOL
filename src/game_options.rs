@@ -1,8 +1,9 @@
 use crate::{
-    core::{self, Result, Settings},
+    core::{Result, Settings},
     game,
     json::{self, Value, object},
     mods,
+    project::Project,
 };
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
@@ -34,7 +35,7 @@ pub struct OptionSpec {
     pub flag: &'static str,
     pub default: bool,
 }
-pub const OPTIONS: [OptionSpec; 10] = [
+pub const OPTIONS: [OptionSpec; 11] = [
     OptionSpec {
         id: "wideScreen",
         label: "Широкий экран",
@@ -105,18 +106,36 @@ pub const OPTIONS: [OptionSpec; 10] = [
         flag: "-cef_dirty_rects",
         default: false,
     },
+    OptionSpec {
+        id: "graphics",
+        label: "Rodina Future",
+        tooltip: "Новая графика Родины; настройка официального лаунчера.",
+        flag: "-trees_new",
+        default: false,
+    },
 ];
+impl OptionSpec {
+    pub fn supports(&self, project: Project) -> bool {
+        match project {
+            Project::Arizona => self.id != "graphics",
+            Project::Rodina => {
+                ["wideScreen", "windowed", "preload", "shitPc", "graphics"].contains(&self.id)
+            }
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct GameOptions {
+    pub project: Project,
     pub memory: u32,
     pub values: BTreeMap<String, bool>,
 }
-pub fn file() -> PathBuf {
-    core::config_file().with_file_name("game-options.json")
+pub fn file(project: Project) -> PathBuf {
+    project.config("game-options.json")
 }
 impl GameOptions {
     pub fn load(s: &Settings) -> Result<Self> {
-        match fs::read_to_string(file()) {
+        match fs::read_to_string(file(s.project)) {
             Ok(text) => {
                 let v = json::parse(&text)?;
                 let memory = v
@@ -126,15 +145,20 @@ impl GameOptions {
                     .map_err(|_| "Некорректная память игры")?;
                 let values = OPTIONS
                     .iter()
+                    .filter(|o| o.supports(s.project))
                     .map(|o| (o.id.into(), v.get("options").get(o.id).boolean()))
                     .collect();
-                let result = Self { memory, values };
+                let result = Self {
+                    project: s.project,
+                    memory,
+                    values,
+                };
                 result.validate()?;
                 Ok(result)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let native = game::official(s)?;
-                let a = native.get("arizona");
+                let a = native.get(s.project.id());
                 let present = !matches!(a, Value::Null);
                 let native_options: BTreeMap<_, _> = a
                     .get("options")
@@ -152,6 +176,7 @@ impl GameOptions {
                     .unwrap_or(2048);
                 let values = OPTIONS
                     .iter()
+                    .filter(|o| o.supports(s.project))
                     .map(|o| {
                         (
                             o.id.into(),
@@ -163,7 +188,11 @@ impl GameOptions {
                         )
                     })
                     .collect();
-                Ok(Self { memory, values })
+                Ok(Self {
+                    project: s.project,
+                    memory,
+                    values,
+                })
             }
             Err(e) => Err(e.to_string()),
         }
@@ -189,15 +218,18 @@ impl GameOptions {
             ("memory", Value::Number(self.memory.to_string())),
             ("options", options),
         ]);
-        mods::atomic_bytes(&file(), v.dump().as_bytes())
+        mods::atomic_bytes(&file(self.project), v.dump().as_bytes())
     }
     pub fn sync(&self, s: &Settings) -> Result<()> {
+        if self.project != s.project {
+            return Err("Настройки принадлежат другой игре".into());
+        }
         self.validate()?;
         let Some(path) = mods::official_settings(s) else {
             return Ok(());
         };
         let mut value = game::official(s)?;
-        let mut a = value.get("arizona").clone();
+        let mut a = value.get(s.project.id()).clone();
         let mut memory = a.get("memory").clone();
         memory.put("value", Value::Number(self.memory.to_string()));
         a.put("memory", memory);
@@ -213,7 +245,7 @@ impl GameOptions {
             }
         }
         a.put("options", Value::Array(options));
-        value.put("arizona", a);
+        value.put(s.project.id(), a);
         mods::atomic_bytes(&path, value.dump().as_bytes())
     }
 }

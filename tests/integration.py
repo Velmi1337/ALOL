@@ -127,6 +127,19 @@ class Workflow(unittest.TestCase):
     def prefix(self):
         return self.data / "prefixes" / self.settings["runner"]
 
+    def test_log_cleanup_only_changes_its_own_files_without_starting_runner(self):
+        folder=self.data/'alol/logs'; folder.mkdir(parents=True)
+        (folder/'alol.log').write_text('current')
+        (folder/'alol.previous.log').write_text('previous')
+        (folder/'keep.log').write_text('keep')
+        before=self.config.read_bytes()
+        self.run_alol('logs-clear')
+        self.assertEqual((folder/'alol.log').read_bytes(),b'')
+        self.assertFalse((folder/'alol.previous.log').exists())
+        self.assertEqual((folder/'keep.log').read_text(),'keep')
+        self.assertEqual(self.config.read_bytes(),before)
+        self.assertFalse(self.trace.exists())
+
     def test_new_profile_uses_available_wine_but_explicit_proton_never_switches_prefix(self):
         self.config.unlink()
         (self.bin/'umu-run').unlink()

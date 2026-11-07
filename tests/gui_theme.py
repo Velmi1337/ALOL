@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check computed GTK colors under light/dark system themes; needs a display."""
 import ctypes as c
+import os
 from pathlib import Path
 import re
 import unittest
@@ -36,6 +37,10 @@ class Theme(unittest.TestCase):
             raise unittest.SkipTest("Needs a graphical session")
         css = re.search(r'const CSS: &str = r#"(.*?)"#;',
                         (Path(__file__).resolve().parents[1] / "src/gui.rs").read_text(), re.S)[1].encode()
+        if os.environ.get("ALOL_TEST_UI_THEME") == "light":
+            source = (Path(__file__).resolve().parents[1] / "src/gui.rs").read_text()
+            colors = re.search(r'const LIGHT_COLORS: &str = r#"(.*?)"#;', source, re.S)[1]
+            css = (colors + "\n@define-color theme_bg_color" + css.decode().split("@define-color theme_bg_color", 1)[1]).encode()
         provider = bind(cls.gtk, "gtk_css_provider_new", P)()
         error = P()
         ok = bind(cls.gtk, "gtk_css_provider_load_from_data", c.c_int, P, c.c_char_p, c.c_ssize_t, P)(provider, css, -1, c.byref(error))

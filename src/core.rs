@@ -4,7 +4,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     os::{
         fd::AsRawFd,
-        unix::fs::{MetadataExt, PermissionsExt},
+        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
     process::Command,
@@ -46,6 +46,8 @@ pub fn log_file() -> PathBuf {
 
 #[derive(Clone, Debug)]
 pub struct Settings {
+    pub project: crate::project::Project,
+    pub ui_theme: String,
     pub runner: String,
     pub proton: String,
     pub wine: String,
@@ -68,6 +70,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            project: crate::project::Project::default(),
+            ui_theme: "dark".into(),
             runner: if !available("umu-run") && available("wine") {
                 "wine"
             } else {
@@ -113,6 +117,8 @@ impl Settings {
                 return Err("Повреждён settings.conf: ожидается ключ=значение".into());
             };
             match k {
+                "project" => self.project = crate::project::Project::parse(v)?,
+                "ui_theme" => self.ui_theme = v.into(),
                 "runner" => self.runner = v.into(),
                 "proton" => self.proton = v.into(),
                 "wine" => self.wine = v.into(),
@@ -138,6 +144,9 @@ impl Settings {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if !["dark", "light"].contains(&self.ui_theme.as_str()) {
+            return Err("Выберите светлую или тёмную тему".into());
+        }
         if !["startup", "daily", "weekly", "manual"].contains(&self.update_policy.as_str()) {
             return Err("Неизвестный режим проверки обновлений".into());
         }
@@ -195,7 +204,9 @@ impl Settings {
         let path = config_file();
         fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
         let text = format!(
-            "# ALOL — пути записываются без кавычек\nrunner={}\nproton={}\nwine={}\ninstaller={}\nexecutable={}\nprefix_root={}\nwined3d={}\ndisable_gpu={}\ndiscrete_gpu={}\ndebug={}\nno_sync={}\nlauncher_compatibility={}\ninput_compatibility={}\nfps_hud={}\ngame_mode={}\nupdate_policy={}\nupdate_notifications={}\n",
+            "# ALOL — пути записываются без кавычек\nproject={}\nui_theme={}\nrunner={}\nproton={}\nwine={}\ninstaller={}\nexecutable={}\nprefix_root={}\nwined3d={}\ndisable_gpu={}\ndiscrete_gpu={}\ndebug={}\nno_sync={}\nlauncher_compatibility={}\ninput_compatibility={}\nfps_hud={}\ngame_mode={}\nupdate_policy={}\nupdate_notifications={}\n",
+            self.project.id(),
+            self.ui_theme,
             self.runner,
             self.proton,
             self.wine,
@@ -279,7 +290,7 @@ impl Settings {
                 self.proton.clone()
             };
             c.env("PROTONPATH", proton)
-                .env("GAMEID", crate::desktop::arizona_game_id())
+                .env("GAMEID", crate::desktop::game_id(self.project))
                 .env("STORE", "none")
                 .env(
                     "ALOL_TARGET_KIND",
@@ -750,7 +761,11 @@ fn run_managed(
     }
 }
 
-pub fn execute(action: &str, args: &[String]) -> Result<()> {
+pub fn execute(
+    action: &str,
+    args: &[String],
+    project: Option<crate::project::Project>,
+) -> Result<()> {
     // Stay alive until the child exits after a group SIGTERM, keeping the prefix locked.
     // exec resets this caught handler to the default disposition in child programs.
     unsafe {
@@ -758,6 +773,7 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
     }
     if ![
         "doctor",
+        "project",
         "runtime-prepare",
         "prepare",
         "install",
@@ -783,7 +799,19 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
     {
         return Err(format!("Неизвестная команда: {action}. См. alol --help"));
     }
-    let s = Settings::load()?;
+    let mut s = Settings::load()?;
+    if let Some(project) = project {
+        s.project = project;
+    }
+    if action == "project" {
+        if args.len() != 1 {
+            return Err("Укажите arizona или rodina: alol project rodina".into());
+        }
+        s.project = crate::project::Project::parse(&args[0])?;
+        s.save()?;
+        println!("Выбрана {}", s.project.name());
+        return Ok(());
+    }
     if action == "runtime-prepare" {
         if args.iter().any(|a| a != "--select") {
             return Err("runtime-prepare принимает только --select".into());
@@ -791,9 +819,9 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
         return crate::alol_proton::prepare(&s, args.iter().any(|a| a == "--select"));
     }
     if matches!(action, "launch" | "play")
-        && let Err(error) = crate::desktop::integrate_arizona()
+        && let Err(error) = crate::desktop::integrate_game(s.project)
     {
-        eprintln!("Иконка окна Arizona: {error}");
+        eprintln!("Иконка окна {}: {error}", s.project.name());
     }
     if action == "doctor" {
         println!("{}", doctor(&s));
@@ -803,7 +831,7 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
         return crate::mods::execute(&s, action, args);
     }
     if action == "servers-refresh" {
-        return crate::game::refresh_servers();
+        return crate::game::refresh_servers(s.project);
     }
     let _lock = PrefixLock::acquire(&s.prefix())?;
     if action == "mods-preview" {
@@ -897,7 +925,7 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
             } else {
                 vec!["--no-sandbox"]
             };
-            let watched = exe.parent().map(|p| p.join("bin/arizona"));
+            let watched = crate::mods::game_path(&s).ok();
             let result = run_managed(&s, &exe.to_string_lossy(), &args, watched.clone());
             if result.is_err()
                 && s.launcher_compatibility
@@ -944,10 +972,13 @@ pub fn execute(action: &str, args: &[String]) -> Result<()> {
         }
         "reset-game" => {
             let mut paths = Vec::new();
+            let project_file = format!("{}.set", s.project.id());
             walk(&s.prefix().join("drive_c/users"), 7, &mut |p| {
-                if p.file_name()
-                    .is_some_and(|n| n.eq_ignore_ascii_case("gta_sa.set"))
-                {
+                if p.file_name().is_some_and(|n| {
+                    n.eq_ignore_ascii_case(&project_file)
+                        || (s.project == crate::project::Project::Arizona
+                            && n.eq_ignore_ascii_case("gta_sa.set"))
+                }) {
                     paths.push(p.to_path_buf());
                 }
             });
@@ -1152,13 +1183,10 @@ fn is_zone_metadata(path: &Path) -> bool {
 }
 
 fn backup_zone_identifiers(s: &Settings) -> Result<usize> {
-    let Some(exe) = s.find_executable() else {
+    let Ok(game) = crate::mods::game_path(s) else {
         return Ok(0);
     };
-    let Some(launcher) = exe.parent() else {
-        return Ok(0);
-    };
-    backup_zone_identifiers_at(&launcher.join("bin/arizona"))
+    backup_zone_identifiers_at(&game)
 }
 
 fn backup_zone_identifiers_at(game: &Path) -> Result<usize> {
@@ -1264,6 +1292,7 @@ pub fn doctor(s: &Settings) -> String {
             &versions
         }
     );
+    out.push_str(&format!("\nИгра: {}\n", s.project.name()));
     for (cmd, args) in [
         ("umu-run", vec!["--version"]),
         ("lspci", vec![]),
@@ -1325,7 +1354,7 @@ pub fn stamp() -> u128 {
         .as_millis()
 }
 
-pub fn open_log() -> Result<File> {
+pub fn open_log(action: &str, project: crate::project::Project) -> Result<File> {
     let path = log_file();
     fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     if path.metadata().is_ok_and(|m| m.len() > 4 * 1024 * 1024) {
@@ -1334,9 +1363,24 @@ pub fn open_log() -> Result<File> {
     let mut f = OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
         .open(&path)
         .map_err(|e| e.to_string())?;
-    writeln!(f, "\n──────── ALOL · {} ────────", stamp()).map_err(|e| e.to_string())?;
+    let time = Command::new("date")
+        .arg("+%Y-%m-%d %H:%M:%S")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| format!("{}", stamp()));
+    writeln!(
+        f,
+        "\n──────── ALOL · {} · {} · {} ────────",
+        time,
+        project.name(),
+        crate::logs::operation_title(action)
+    )
+    .map_err(|e| e.to_string())?;
     Ok(f)
 }
 
@@ -1346,12 +1390,12 @@ pub fn tail_log() -> String {
 
 fn tail_log_at(path: &Path) -> String {
     let Ok(mut f) = File::open(path) else {
-        return "Здесь появится журнал операций.".into();
+        return String::new();
     };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let _ = f.seek(SeekFrom::Start(len.saturating_sub(48 * 1024)));
     let mut bytes = Vec::new();
-    let _ = f.read_to_end(&mut bytes);
+    let _ = f.take(48 * 1024).read_to_end(&mut bytes);
     String::from_utf8_lossy(&bytes).replace('\0', "")
 }
 
@@ -1420,6 +1464,12 @@ mod tests {
         );
         assert!(settings.update_notifications);
         assert!(settings.input_compatibility);
+        assert_eq!(settings.ui_theme, "dark");
+        assert_eq!(
+            settings.parse("ui_theme=light\n").unwrap().ui_theme,
+            "light"
+        );
+        assert!(Settings::default().parse("ui_theme=unknown\n").is_err());
         let saved = settings
             .parse(
                 "update_policy=manual\nupdate_notifications=false\nlauncher_compatibility=false\ninput_compatibility=false\n",

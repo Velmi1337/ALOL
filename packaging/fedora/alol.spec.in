@@ -4,8 +4,8 @@
 Name:           alol
 Version:        @VERSION@
 Release:        1%{?dist}
-Summary:        Native Arizona RP launcher for Linux
-License:        Apache-2.0
+Summary:        Arizona RP and Rodina RP launcher with Material 3 Expressive UI
+License:        Apache-2.0 AND OFL-1.1
 URL:            @REPOSITORY@
 Source0:        alol-%{version}.tar.gz
 Packager:       ALOL contributors
@@ -15,6 +15,7 @@ BuildRequires:  cargo
 BuildRequires:  rust
 BuildRequires:  gcc
 BuildRequires:  gtk3-devel
+BuildRequires:  fontconfig-devel
 BuildRequires:  glib2-devel
 BuildRequires:  cairo-devel
 BuildRequires:  libarchive-devel
@@ -35,8 +36,9 @@ Requires:       python3
 Suggests:       gamemode
 
 %description
-Lightweight native Rust/GTK launcher for Arizona RP. Includes server and
-nickname selection, game settings, mods, prefix maintenance and logs.
+Native Rust/GTK launcher for Arizona RP and Rodina RP with a Material 3
+Expressive interface. Includes game selection, server profiles, mod archives,
+settings, prefix maintenance, searchable logs and launcher updates.
 Personal profiles and game files are not included.
 
 %prep
@@ -58,6 +60,7 @@ desktop-file-validate assets/alol.desktop
 PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/mods_integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/game_integration.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/project_integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/update_integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/proton_runtime.py
 

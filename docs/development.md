@@ -46,6 +46,7 @@ cargo build --offline --release
 PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/mods_integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/game_integration.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/project_integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/update_integration.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/proton_runtime.py
 ```

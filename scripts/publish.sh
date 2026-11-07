@@ -18,6 +18,10 @@ PY
 )
 alol_repo=${alol_metadata[0]}
 alol_version=${alol_metadata[1]}
+alol_title="ALOL $alol_version"
+if [[ $alol_version == 1.0.0 ]]; then
+    alol_title='ALOL 1.0.0 — первый стабильный релиз'
+fi
 alol_remote="https://github.com/$alol_repo.git"
 if [[ $(git branch --show-current) != main ]] || \
     [[ $(git rev-parse "v$alol_version^{commit}") != "$(git rev-parse HEAD)" ]]; then
@@ -44,10 +48,14 @@ alol_artifacts=("dist/alol-$alol_version-1-x86_64.pkg.tar.zst" \
 alol_runtime_asset=$(python3 -c 'import json; print(json.load(open("runtime/base.json"))["overlay_filename"])')
 alol_artifacts+=("dist/$alol_runtime_asset")
 if gh release view "v$alol_version" --repo "$alol_repo" >/dev/null 2>&1; then
+    if [[ $(gh release view "v$alol_version" --repo "$alol_repo" --json isDraft --jq .isDraft) != true ]]; then
+        echo 'This release is already public; refusing to replace its assets.' >&2
+        exit 1
+    fi
     gh release upload "v$alol_version" --repo "$alol_repo" --clobber "${alol_artifacts[@]}"
 else
     gh release create "v$alol_version" --repo "$alol_repo" --verify-tag \
-        --draft --title "ALOL $alol_version" --notes-file docs/release-notes.md "${alol_artifacts[@]}"
+        --draft --title "$alol_title" --notes-file docs/release-notes.md "${alol_artifacts[@]}"
 fi
 printf '\nBuilding and testing the native Fedora RPM in GitHub Actions...\n'
 alol_dispatched_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -68,5 +76,5 @@ gh run watch "$alol_run" --repo "$alol_repo" --exit-status --interval 10
 gh release download "v$alol_version" --repo "$alol_repo" --dir dist --clobber \
     --pattern "alol-$alol_version-*.x86_64.rpm" --pattern SHA256SUMS.fedora
 python3 scripts/verify-fedora-download.py dist
-gh release edit "v$alol_version" --repo "$alol_repo" --draft=false --latest
+gh release edit "v$alol_version" --repo "$alol_repo" --draft=false --prerelease=false --latest --title "$alol_title"
 printf '\nPublished: https://github.com/%s/releases/tag/v%s\n' "$alol_repo" "$alol_version"

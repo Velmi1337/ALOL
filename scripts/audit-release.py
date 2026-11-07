@@ -33,7 +33,7 @@ def audit_fedora(directory, version):
     query = "%{NAME}\n%{VERSION}\n%{ARCH}\n%{PACKAGER}\n%{BUILDHOST}\n%{RELEASE}\n%{LICENSE}\n"
     fields = subprocess.check_output(["rpm", "-qp", "--qf", query, str(package)], text=True).splitlines()
     if (fields[:5] != ["alol", version, "x86_64", "ALOL contributors", "alol-builder"]
-            or not re.fullmatch(r"1\.fc[0-9]+", fields[5]) or fields[6] != "Apache-2.0"):
+            or not re.fullmatch(r"1\.fc[0-9]+", fields[5]) or fields[6] != "Apache-2.0 AND OFL-1.1"):
         raise ValueError("Unexpected RPM identity or private build metadata")
     info = subprocess.check_output([
         "rpm", "-qp", "--qf", "[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILEUSERNAME}\t%{FILEGROUPNAME}\n]", str(package)
@@ -136,8 +136,8 @@ def main():
             audit_bytes(name, data)
             if name == ".PKGINFO" and b"packager = ALOL contributors\n" not in data:
                 raise ValueError("Package author is not anonymous")
-            if name == ".PKGINFO" and b"license = Apache-2.0\n" not in data:
-                raise ValueError("Package license is not Apache-2.0")
+            if name == ".PKGINFO" and not all(value in data for value in (b"license = Apache-2.0\n", b"license = OFL-1.1\n")):
+                raise ValueError("Package must list Apache-2.0 and OFL-1.1")
             if name.startswith("usr/share/licenses/alol/") and data != (ROOT / Path(name).name).read_bytes():
                 raise ValueError("Package license/notice differs from source")
         pkgbuild = args.directory / "PKGBUILD"

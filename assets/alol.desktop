@@ -2,12 +2,12 @@
 Type=Application
 Name=ALOL
 GenericName=Arizona Launcher On Linux
-Comment=Arizona RP через Wine и Proton
+Comment=Arizona RP and Rodina RP on Linux with Material 3 Expressive
 Exec=alol
 TryExec=alol
 Icon=alol
 StartupWMClass=alol
 Terminal=false
 Categories=Game;
-Keywords=Arizona;RP;Wine;Proton;ALOL;
+Keywords=Arizona;Rodina;Родина;RP;Wine;Proton;ALOL;
 StartupNotify=false

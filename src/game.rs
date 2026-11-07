@@ -3,10 +3,12 @@ use crate::{
     core::{self, Result, Settings},
     json::{self, Value, object, string},
     mods,
+    project::Project,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Read,
     net::IpAddr,
     path::PathBuf,
 };
@@ -59,16 +61,16 @@ pub fn validate_nickname(nick: &str) -> Result<()> {
     }
     Ok(())
 }
-fn server_cache() -> PathBuf {
-    core::data_dir().join("servers/catalog.json")
+fn server_cache(project: Project) -> PathBuf {
+    project.cache("servers", "catalog.json")
 }
-pub fn player_file() -> PathBuf {
-    core::config_file().with_file_name("player.json")
+pub fn player_file(project: Project) -> PathBuf {
+    project.config("player.json")
 }
 /// Remove only files owned by the discontinued 0.5.0 password helper.
 /// Called with the prefix lock held; keep Moonloader and unrelated mods intact.
 pub fn cleanup_legacy(s: &Settings) -> Result<()> {
-    if player_file().is_file() {
+    if player_file(s.project).is_file() {
         PlayerProfile::load(s)?;
     }
     let mut removed = 0;
@@ -114,10 +116,10 @@ pub fn cleanup_legacy(s: &Settings) -> Result<()> {
     }
     Ok(())
 }
-fn parse_servers(v: &Value) -> Result<Vec<Server>> {
+fn parse_servers(v: &Value, project: Project) -> Result<Vec<Server>> {
     let a = match v {
         Value::Array(a) => a.as_slice(),
-        _ => v.get("arizona").array(),
+        _ => v.get(project.id()).array(),
     };
     let mut out = Vec::new();
     let mut ids = BTreeSet::new();
@@ -168,17 +170,21 @@ fn parse_servers(v: &Value) -> Result<Vec<Server>> {
     out.sort_by_key(|s| s.id.parse::<u32>().unwrap_or(0));
     Ok(out)
 }
-pub fn servers() -> Result<Vec<Server>> {
-    if let Ok(bytes) = fs::read_to_string(server_cache())
+pub fn servers(project: Project) -> Result<Vec<Server>> {
+    if let Ok(bytes) = fs::read_to_string(server_cache(project))
         && let Ok(v) = json::parse(&bytes)
-        && let Ok(servers) = parse_servers(&v)
+        && let Ok(servers) = parse_servers(&v, project)
     {
         return Ok(servers);
     }
-    parse_servers(&json::parse(include_str!("../assets/servers.json"))?)
+    let text = match project {
+        Project::Arizona => include_str!("../assets/servers.json"),
+        Project::Rodina => include_str!("../assets/servers-rodina.json"),
+    };
+    parse_servers(&json::parse(text)?, project)
 }
-pub fn refresh_servers() -> Result<()> {
-    let directory = core::data_dir().join("servers");
+pub fn refresh_servers(project: Project) -> Result<()> {
+    let directory = server_cache(project).parent().unwrap().to_path_buf();
     fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
     let temporary = directory.join(format!(
         "download-{}-{}.json",
@@ -191,8 +197,8 @@ pub fn refresh_servers() -> Result<()> {
             mods::fetch(url, &temporary, 8 * 1024 * 1024)?;
             let bytes = fs::read_to_string(&temporary).map_err(|e| e.to_string())?;
             let value = json::parse(&bytes)?;
-            let records = parse_servers(&value)?;
-            mods::atomic_bytes(&server_cache(), value.dump().as_bytes())?;
+            let records = parse_servers(&value, project)?;
+            mods::atomic_bytes(&server_cache(project), value.dump().as_bytes())?;
             println!("Список серверов обновлён: {}", records.len());
             Ok(())
         })();
@@ -219,13 +225,14 @@ pub fn official(s: &Settings) -> Result<Value> {
 
 #[derive(Clone)]
 pub struct PlayerProfile {
+    pub project: Project,
     pub server_id: String,
     pub nickname: String,
     pub nicknames: BTreeMap<String, String>,
 }
 impl PlayerProfile {
     pub fn load(s: &Settings) -> Result<Self> {
-        match fs::read_to_string(player_file()) {
+        match fs::read_to_string(player_file(s.project)) {
             Ok(text) => {
                 let v = json::parse(&text)?;
                 let mut names = BTreeMap::new();
@@ -234,31 +241,45 @@ impl PlayerProfile {
                         names.insert(id.clone(), nick.text());
                     }
                 }
-                let profile = Self {
+                let mut profile = Self {
+                    project: s.project,
                     server_id: v.get("server_id").text(),
                     nickname: v.get("nickname").text(),
                     nicknames: names,
                 };
+                if s.project == Project::Rodina {
+                    profile.nickname.clear();
+                    profile.nicknames.clear();
+                }
                 profile.validate_draft()?;
                 // Upgrade 0.5.0 profiles without retaining any credentials.
-                if !matches!(v.get("logins"), Value::Null) {
+                if !matches!(v.get("logins"), Value::Null)
+                    || (s.project == Project::Rodina
+                        && (!matches!(v.get("nickname"), Value::Null)
+                            || !matches!(v.get("nicknames"), Value::Null)))
+                {
                     profile.save()?;
                 }
                 Ok(profile)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let native = official(s)?;
-                let game = native.get("arizona");
+                let game = native.get(s.project.id());
                 let id = game.get("lastSelectedServerId").text();
                 let id = if id.parse::<u32>().is_ok_and(|id| id > 0) {
                     id
                 } else {
                     "1".into()
                 };
-                let nick = game.get("userName").text();
+                let nick = if s.project == Project::Arizona {
+                    game.get("userName").text()
+                } else {
+                    String::new()
+                };
                 let mut names = BTreeMap::new();
                 names.insert(id.clone(), nick.clone());
                 let profile = Self {
+                    project: s.project,
                     server_id: id,
                     nickname: nick,
                     nicknames: names,
@@ -284,11 +305,18 @@ impl PlayerProfile {
         Ok(())
     }
     pub fn set_nickname(&mut self, nick: String) {
+        if self.project == Project::Rodina {
+            return;
+        }
         self.nickname = nick;
         self.nicknames
             .insert(self.server_id.clone(), self.nickname.clone());
     }
     pub fn select(&mut self, id: &str) {
+        if self.project == Project::Rodina {
+            self.server_id = id.into();
+            return;
+        }
         self.nicknames
             .insert(self.server_id.clone(), self.nickname.clone());
         self.server_id = id.into();
@@ -299,6 +327,14 @@ impl PlayerProfile {
     }
     pub fn save(&self) -> Result<()> {
         self.validate_draft()?;
+        if self.project == Project::Rodina {
+            return mods::atomic_bytes(
+                &player_file(self.project),
+                object([("server_id", string(&self.server_id))])
+                    .dump()
+                    .as_bytes(),
+            );
+        }
         let names = Value::Object(
             self.nicknames
                 .iter()
@@ -310,16 +346,18 @@ impl PlayerProfile {
             ("nickname", string(&self.nickname)),
             ("nicknames", names),
         ]);
-        mods::atomic_bytes(&player_file(), value.dump().as_bytes())
+        mods::atomic_bytes(&player_file(self.project), value.dump().as_bytes())
     }
     pub fn server(&self) -> Result<Server> {
-        servers()?
+        servers(self.project)?
             .into_iter()
             .find(|s| s.id == self.server_id)
             .ok_or("Выбранный сервер не найден. Нажмите «Обновить серверы».".into())
     }
     pub fn validate_launch(&self) -> Result<Server> {
-        validate_nickname(&self.nickname)?;
+        if self.project == Project::Arizona {
+            validate_nickname(&self.nickname)?;
+        }
         let server = self.server()?;
         if server.capacity == Some(0) {
             return Err("Сервер временно недоступен. Выберите другой сервер.".into());
@@ -328,24 +366,31 @@ impl PlayerProfile {
     }
 }
 pub fn sync_player(s: &Settings, p: &PlayerProfile) -> Result<()> {
+    if p.project != s.project {
+        return Err("Профиль принадлежит другой игре".into());
+    }
     let Some(path) = mods::official_settings(s) else {
         return Ok(());
     };
     let mut value = official(s)?;
-    let mut game = value.get("arizona").clone();
-    if game.get("userName").text() == p.nickname
+    let mut game = value.get(s.project.id()).clone();
+    if (s.project == Project::Rodina || game.get("userName").text() == p.nickname)
         && game.get("lastSelectedServerId").text() == p.server_id
+        && value.get("lastSelectedGameId").text() == s.project.id()
     {
         return Ok(());
     }
-    game.put("userName", string(&p.nickname));
+    if s.project == Project::Arizona {
+        game.put("userName", string(&p.nickname));
+    }
     let id = p
         .server_id
         .parse::<u32>()
         .map_err(|_| "Неверный ID сервера")?
         .to_string();
     game.put("lastSelectedServerId", Value::Number(id));
-    value.put("arizona", game);
+    value.put(s.project.id(), game);
+    value.put("lastSelectedGameId", string(s.project.id()));
     mods::atomic_bytes(&path, value.dump().as_bytes())
 }
 pub struct LaunchPlan {
@@ -364,11 +409,31 @@ pub fn game_executable(s: &Settings) -> Result<PathBuf> {
     Err("Игровой EXE не найден. Откройте «Обновить игру» и загрузите файлы Arizona.".into())
 }
 pub fn plan(s: &Settings, profile: &PlayerProfile) -> Result<LaunchPlan> {
+    if s.project != profile.project {
+        return Err("Профиль принадлежит другой игре".into());
+    }
     let server = profile.validate_launch()?;
     let executable = game_executable(s)?;
     let root = executable.parent().ok_or("Нет папки игры")?.to_path_buf();
     let value = official(s)?;
     let options = crate::game_options::GameOptions::load(s)?;
+    // Rodina asks for the character name in-game. Its official launcher passes
+    // a disposable Player_<12 hex> transport name, unrelated to the character.
+    let nickname = if s.project == Project::Rodina {
+        let mut random = [0u8; 6];
+        fs::File::open("/dev/urandom")
+            .and_then(|mut f| f.read_exact(&mut random))
+            .map_err(|e| format!("Не создать служебное имя запуска: {e}"))?;
+        format!(
+            "Player_{}",
+            random
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        )
+    } else {
+        profile.nickname.clone()
+    };
     let mut args = vec![
         "-c".into(),
         "-h".into(),
@@ -376,16 +441,19 @@ pub fn plan(s: &Settings, profile: &PlayerProfile) -> Result<LaunchPlan> {
         "-p".into(),
         server.port.to_string(),
         "-n".into(),
-        profile.nickname.clone(),
+        nickname,
         "-mem".into(),
         options.memory.to_string(),
         "-window".into(),
-        "-arizona".into(),
+        s.project.launch_flag().into(),
     ];
     if !options.enabled("windowed") {
         args.push("-modern_scale".into());
     }
-    for option in crate::game_options::OPTIONS {
+    for option in crate::game_options::OPTIONS
+        .iter()
+        .filter(|o| o.supports(s.project))
+    {
         if !option.flag.is_empty() && options.enabled(option.id) {
             args.push(option.flag.into());
         }
@@ -398,7 +466,7 @@ pub fn plan(s: &Settings, profile: &PlayerProfile) -> Result<LaunchPlan> {
     {
         args.extend(["-userId".into(), fingerprint]);
     }
-    if let Value::Object(mods) = value.get("installedMods").get("arizona") {
+    if let Value::Object(mods) = value.get("installedMods").get(s.project.id()) {
         for m in mods.values() {
             let flag = m.get("flag").text();
             if flag.is_empty() {
@@ -414,7 +482,8 @@ pub fn plan(s: &Settings, profile: &PlayerProfile) -> Result<LaunchPlan> {
                 && !["-c", "-h", "-p", "-n", "-mem", "-userId", "-cdn", "-z"]
                     .iter()
                     .any(|reserved| reserved.eq_ignore_ascii_case(&flag))
-                && !["-x", "-window", "-modern_scale", "-arizona"].contains(&flag.as_str())
+                && !["-x", "-window", "-modern_scale", "-arizona", "-rodina"]
+                    .contains(&flag.as_str())
                 && !crate::game_options::OPTIONS.iter().any(|o| o.flag == flag)
                 && !args.contains(&flag)
             {
@@ -451,8 +520,11 @@ mod tests {
     use super::*;
     #[test]
     fn bundled_servers_and_addresses() {
-        let all =
-            parse_servers(&json::parse(include_str!("../assets/servers.json")).unwrap()).unwrap();
+        let all = parse_servers(
+            &json::parse(include_str!("../assets/servers.json")).unwrap(),
+            Project::Arizona,
+        )
+        .unwrap();
         assert!(!all.is_empty());
         assert!(all.iter().all(|s| valid_host(&s.host) && s.port > 0));
     }
@@ -472,6 +544,7 @@ mod tests {
     #[test]
     fn nicknames_are_kept_per_server() {
         let mut p = PlayerProfile {
+            project: Project::Arizona,
             server_id: "1".into(),
             nickname: "First_Name".into(),
             nicknames: BTreeMap::new(),
@@ -486,7 +559,7 @@ mod tests {
     #[test]
     fn api_servers_validate_and_preserve_population() {
         let v=json::parse(r#"{"arizona":[{"number":2,"name":"Tucson","ip":"127.0.0.1","port":7777,"online":12,"maxplayers":1000}]}"#).unwrap();
-        let a = parse_servers(&v).unwrap();
+        let a = parse_servers(&v, Project::Arizona).unwrap();
         assert_eq!(a[0].online, Some(12));
         assert!(a[0].label().contains("12/1000"));
     }

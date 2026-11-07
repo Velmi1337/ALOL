@@ -17,10 +17,6 @@ const APIS: [&str; 2] = [
     "https://api-samp.arizona-five.com/launcher/mods",
     "https://arz-api-samp-reserve.s-amp.com/launcher/mods",
 ];
-const CDNS: [&str; 2] = [
-    "https://pc.az-ins.com/resource/mods",
-    "https://arz-pc.react-group.tech/resource/mods",
-];
 const MAX_FILE: u64 = 2 * 1024 * 1024 * 1024;
 #[derive(Clone, Debug)]
 pub struct CatalogMod {
@@ -84,8 +80,8 @@ fn fnv(s: &str) -> String {
     }
     format!("{n:016x}")
 }
-fn catalog_path() -> PathBuf {
-    core::data_dir().join("mods/catalog.json")
+fn catalog_path(s: &Settings) -> PathBuf {
+    s.project.cache("mods", "catalog.json")
 }
 fn read_json(p: &Path) -> Result<Value> {
     let bytes = fs::read(p).map_err(err)?;
@@ -157,19 +153,20 @@ pub(crate) fn official_settings(s: &Settings) -> Option<PathBuf> {
     }
     None
 }
-pub fn game_dir(s: &Settings) -> Result<PathBuf> {
+pub fn game_path(s: &Settings) -> Result<PathBuf> {
     let exe = s
         .find_executable()
         .ok_or("Сначала установите официальный лаунчер Arizona")?;
     let mut game = exe
         .parent()
         .ok_or("Не найдена папка лаунчера")?
-        .join("bin/arizona");
+        .join("bin")
+        .join(s.project.id());
     if let Some(path) = official_settings(s)
         && let Ok(settings) = read_json(&path)
     {
         let location = settings
-            .get("arizona")
+            .get(s.project.id())
             .get("gamePath")
             .text()
             .replace('\\', "/");
@@ -188,7 +185,15 @@ pub fn game_dir(s: &Settings) -> Result<PathBuf> {
             game = PathBuf::from(format!("/{}", &location[3..]));
         }
     }
-    if !game.is_dir() || game.is_symlink() {
+    if game.is_symlink() {
+        return Err("Папка игры не должна быть символической ссылкой".into());
+    }
+    Ok(game)
+}
+
+pub fn game_dir(s: &Settings) -> Result<PathBuf> {
+    let game = game_path(s)?;
+    if !game.is_dir() {
         return Err("Сначала скачайте игру через официальный лаунчер".into());
     }
     game.canonicalize().map_err(err)
@@ -343,11 +348,11 @@ fn fetch_json(path: &str, out: &Path) -> Result<Value> {
     }
     Err(last)
 }
-pub fn catalog() -> Result<Vec<CatalogMod>> {
-    if !catalog_path().exists() {
+pub fn catalog(s: &Settings) -> Result<Vec<CatalogMod>> {
+    if !catalog_path(s).exists() {
         return Ok(Vec::new());
     }
-    parse_catalog(&read_json(&catalog_path())?)
+    parse_catalog(&read_json(&catalog_path(s))?)
 }
 fn parse_catalog(v: &Value) -> Result<Vec<CatalogMod>> {
     let mut mods = BTreeMap::new();
@@ -421,7 +426,7 @@ fn sync_official(s: &Settings, v: &Value, enabled: bool) -> Result<()> {
     };
     let mut settings = read_json(&path)?;
     let mut all = settings.get("installedMods").clone();
-    let mut arizona = all.get("arizona").clone();
+    let mut arizona = all.get(s.project.id()).clone();
     let id = v.get("native_id").text();
     if enabled {
         let mut meta = v.get("meta").clone();
@@ -457,7 +462,7 @@ fn sync_official(s: &Settings, v: &Value, enabled: bool) -> Result<()> {
     } else {
         arizona.remove(&id);
     }
-    all.put("arizona", arizona);
+    all.put(s.project.id(), arizona);
     settings.put("installedMods", all);
     write_json(&path, &settings)
 }
@@ -754,18 +759,24 @@ fn official_install(s: &Settings, id: &str) -> Result<()> {
         .exists()
         && let Some(p) = official_settings(s)
         && !matches!(
-            read_json(&p)?.get("installedMods").get("arizona").get(id),
+            read_json(&p)?
+                .get("installedMods")
+                .get(s.project.id())
+                .get(id),
             Value::Null
         )
     {
         return Err("Этот мод установлен через Arizona. Удалите его там перед установкой через ALOL, чтобы сохранить корректный откат файлов.".into());
     }
-    let entry = catalog()?
+    let entry = catalog(s)?
         .into_iter()
         .find(|m| m.id == id)
         .ok_or("Сначала обновите каталог и выберите официальный мод")?;
     let stage = staging()?;
-    let v = fetch_json(&format!("/arizona/{id}"), &stage.0.join("manifest.json"))?;
+    let v = fetch_json(
+        &format!("/{}/{id}", s.project.id()),
+        &stage.0.join("manifest.json"),
+    )?;
     let mut list = Vec::new();
     manifest(&v, Path::new(""), &mut list, 0)?;
     if list.is_empty() {
@@ -784,7 +795,7 @@ fn official_install(s: &Settings, id: &str) -> Result<()> {
         }
         let out = payload.join(&p);
         let mut ok = false;
-        for cdn in CDNS {
+        for cdn in s.project.mod_cdns() {
             let url = format!("{cdn}/{id}/{}", url_path(&p));
             println!("Загрузка: {}", p.display());
             if fetch(&url, &out, MAX_FILE).is_ok()
@@ -863,15 +874,15 @@ fn local_install(s: &Settings, path: &Path, mode: &str, preview: bool) -> Result
     add_payload(s, &id, &name, "local", "", meta, &payload)
 }
 fn install_loaders(s: &Settings, required: &BTreeSet<String>) -> Result<()> {
-    let mut candidates = catalog()?;
+    let mut candidates = catalog(s)?;
     if required.iter().any(|loader| {
         !candidates
             .iter()
             .any(|m| loader_name(&m.name) == loader_name(loader))
     }) {
-        println!("Проверка загрузчиков в официальном каталоге Arizona…");
+        println!("Проверка загрузчиков в официальном каталоге выбранной игры…");
         execute(s, "mods-refresh", &[])?;
-        candidates = catalog()?;
+        candidates = catalog(s)?;
     }
     // Resolve all names before downloading or installing the first loader.
     let mut selected = Vec::new();
@@ -918,9 +929,12 @@ pub fn execute(s: &Settings, action: &str, args: &[String]) -> Result<()> {
     match action {
         "mods-refresh" => {
             let stage = staging()?;
-            let v = fetch_json("/arizona", &stage.0.join("catalog.json"))?;
+            let v = fetch_json(
+                &format!("/{}", s.project.id()),
+                &stage.0.join("catalog.json"),
+            )?;
             let entries = parse_catalog(&v)?;
-            write_json(&catalog_path(), &v)?;
+            write_json(&catalog_path(s), &v)?;
             println!("Официальный каталог обновлён: {} модов", entries.len());
             Ok(())
         }
