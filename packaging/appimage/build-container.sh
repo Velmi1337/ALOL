@@ -48,6 +48,8 @@ linuxdeploy-x86_64.AppImage --appdir AppDir --executable target/release/alol \
 sed -i '/^export GDK_BACKEND=x11 /d' AppDir/apprun-hooks/linuxdeploy-plugin-gtk.sh
 install -Dm644 LICENSE AppDir/usr/share/licenses/alol/LICENSE
 install -Dm644 NOTICE AppDir/usr/share/licenses/alol/NOTICE
+install -Dm644 /tmp/alol-appimage-tools/gtk-plugin.LICENSE AppDir/usr/share/licenses/alol-appimage/gtk-plugin.LICENSE
+install -Dm644 /tmp/alol-appimage-tools/appimage-runtime.LICENSE AppDir/usr/share/licenses/alol-appimage/appimage-runtime.LICENSE
 python3 scripts/appimage-sources.py AppDir /out
 export LDAI_RUNTIME_FILE=/tmp/alol-appimage-tools/runtime-x86_64 LDAI_NO_APPSTREAM=1
 export LDAI_OUTPUT="/out/alol-$version-x86_64.AppImage" LDAI_VERSION="$version"

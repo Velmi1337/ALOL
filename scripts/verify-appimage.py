@@ -39,7 +39,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix='alol-portable-audit-') as temporary:
             subprocess.run([str(image.resolve()),'--appimage-extract'],cwd=temporary,check=True,stdout=subprocess.DEVNULL)
             root=Path(temporary)/'squashfs-root'
-            for name in ['AppRun','alol.desktop','alol.png','usr/bin/alol','usr/share/licenses/alol/LICENSE','usr/share/licenses/alol/NOTICE','usr/share/doc/alol-appimage/packages.json']:
+            for name in ['AppRun','alol.desktop','alol.png','usr/bin/alol','usr/share/licenses/alol/LICENSE','usr/share/licenses/alol/NOTICE','usr/share/licenses/alol-appimage/gtk-plugin.LICENSE','usr/share/licenses/alol-appimage/appimage-runtime.LICENSE','usr/share/doc/alol-appimage/packages.json']:
                 if not (root/name).is_file():raise ValueError('Incomplete AppImage: '+name)
             for name in ('LICENSE','NOTICE'):
                 if (root/'usr/share/licenses/alol'/name).read_bytes()!=(ROOT/name).read_bytes():raise ValueError('Portable license differs')

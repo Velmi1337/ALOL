@@ -14,5 +14,13 @@
   "runtime-x86_64": {
     "url": "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64",
     "sha256": "617aa77314d57c8b8e4fae9c3f0b35af7b30d5529cb69e98f64f92510ed98a46"
+  },
+  "gtk-plugin.LICENSE": {
+    "url": "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/7a3fbc31a9e5075073ff8790f26effbac5f84453/LICENSE.txt",
+    "sha256": "0718f6cadf38d2662f397591b777884c5389e65b9919aae6aca2bea87a52eac4"
+  },
+  "appimage-runtime.LICENSE": {
+    "url": "https://raw.githubusercontent.com/AppImage/type2-runtime/fedfad51acc2860b2916a1eef32ba4a500ff31ef/LICENSE",
+    "sha256": "aa154fc9070614bbe7921f89db11efd1dba7a1f3a41685958110e2230f9c0ca1"
   }
 }
