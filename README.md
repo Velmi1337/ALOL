@@ -24,10 +24,23 @@
 
 ## Установка
 
+### AUR — Arch Linux / CachyOS
+
+Пакет **[alol](https://aur.archlinux.org/packages/alol)** собирается из исходников
+стабильного релиза:
+
+```sh
+yay -S alol
+# или: paru -S alol
+```
+
+Нужны включённый `multilib` и `base-devel`. Зависимости, включая Rust для сборки,
+устанавливает AUR-помощник. Обычное обновление — `yay -Syu` или `paru -Syu`.
+
+### Arch Linux / CachyOS — пакет из GitHub
+
 Скачайте пакет из [последнего релиза](https://github.com/Velmi1337/ALOL/releases/latest)
 и выполните команду в папке с ним. Поддерживается **x86_64**.
-
-### Arch Linux / CachyOS
 
 ```sh
 sudo pacman -U ./alol-1.0.1-1-x86_64.pkg.tar.zst

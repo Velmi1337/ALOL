@@ -127,6 +127,35 @@ Arch-сборка также экспортирует отдельный `alol-V
 Сам токен в файлы проекта или GitHub Actions secrets не копируется: workflow
 использует временный `GITHUB_TOKEN`, выдаваемый GitHub на время запуска.
 
+## Пакет AUR
+
+Пакет `alol` поддерживается в отдельном Git-репозитории AUR под аккаунтом
+Velmi1337. Рабочий каталог — `../ALOL-AUR`; в AUR отправляются только
+`PKGBUILD` и `.SRCINFO`. Для доступа нужен открытый SSH-ключ в профиле AUR.
+
+```sh
+git clone https://aur.archlinux.org/alol.git ../ALOL-AUR
+git -C ../ALOL-AUR config core.sshCommand 'ssh -l aur'
+git -C ../ALOL-AUR remote set-url origin ssh://aur.archlinux.org/alol.git
+```
+
+После публикации стабильного GitHub Release обновите `pkgver`, `pkgrel` и
+SHA256 исходного архива в AUR-рецепте. Сохраните URL опубликованного релиза,
+проверьте зависимости и выполните:
+
+```sh
+makepkg --verifysource
+makepkg --cleanbuild --clean
+makepkg --printsrcinfo > .SRCINFO
+git add PKGBUILD .SRCINFO
+git commit -m 'Update alol to the new stable release'
+git push origin master
+```
+
+Сборка и установка разделены: команда `makepkg` выше проверяет пакет,
+а установка при необходимости выполняется отдельно через `pacman -U`.
+Неизменность опубликованных файлов GitHub Release сохраняется.
+
 ## Снимки интерфейса
 
 Сделать снимки в своей графической сессии:

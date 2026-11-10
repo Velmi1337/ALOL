@@ -18,6 +18,19 @@ The published interface screenshots are in Russian.
 
 ## Install
 
+### AUR — Arch Linux / CachyOS
+
+The **[alol](https://aur.archlinux.org/packages/alol)** package builds the stable
+release from source:
+
+```sh
+yay -S alol
+# or: paru -S alol
+```
+
+Enable `multilib` and install `base-devel`. Your AUR helper resolves the build
+and runtime dependencies. Update with `yay -Syu` or `paru -Syu`.
+
 Choose a package from the [latest GitHub release](https://github.com/Velmi1337/ALOL/releases/latest).
 The commands below use the currently published `1.0.1` filenames; use the filename of the version you downloaded.
 
