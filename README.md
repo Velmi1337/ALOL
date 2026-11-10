@@ -11,6 +11,7 @@
 
 <p>
   <a href="https://github.com/Velmi1337/ALOL/releases/latest"><strong>Скачать</strong></a> ·
+  <a href="https://aur.archlinux.org/packages/alol">AUR · alol</a> ·
   <a href="docs/guide.md">Руководство</a> ·
   <a href="https://t.me/alolinux">Telegram</a> ·
   <a href="https://github.com/Velmi1337/ALOL/issues">Сообщить об ошибке</a>
@@ -20,7 +21,7 @@
 
 **ALOL 1.0.1 — исправления модов и меню F11.** Две игры в одном окне: **Arizona RP** и
 **Родина RP**. Новый интерфейс **Material 3 Expressive**, светлая и тёмная темы,
-управление модами и понятный журнал операций.
+управление модами и понятный журнал операций. Доступен в **[AUR — alol](https://aur.archlinux.org/packages/alol)**, как AppImage и в пакетах для Arch/CachyOS и Fedora.
 
 ## Установка
 

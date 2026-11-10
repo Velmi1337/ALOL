@@ -2,7 +2,7 @@
 
 [← На главную](../README.md)
 
-Готовые пакеты, сборка из исходников и локальная установка.
+ALOL доступен в [AUR под именем alol](https://aur.archlinux.org/packages/alol), как AppImage и в готовых пакетах Arch/CachyOS и Fedora.
 
 ## AUR — Arch Linux / CachyOS
 

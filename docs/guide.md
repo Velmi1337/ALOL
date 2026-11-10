@@ -2,6 +2,9 @@
 
 [← На главную](../README.md) · [Установка](installation.md)
 
+На Arch Linux и CachyOS ALOL доступен в **[AUR — alol](https://aur.archlinux.org/packages/alol)**:
+`yay -S alol` или `paru -S alol`. Требования и другие способы установки — в [инструкции](installation.md).
+
 ## Выбор игры
 
 Над вкладками находятся кнопки **Arizona RP** и **Родина RP**. Выбор относится

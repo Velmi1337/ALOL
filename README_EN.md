@@ -4,11 +4,12 @@
 
 **Arizona Launcher On Linux. A native Rust and GTK 3 launcher.**
 
-[Русский](README.md) · [Project website](https://velmi1337.github.io/alol/) · [Download](https://github.com/Velmi1337/ALOL/releases/latest) · [Report a problem](https://github.com/Velmi1337/ALOL/issues) · [Telegram](https://t.me/alolinux)
+[Русский](README.md) · [Project website](https://velmi1337.github.io/alol/) · [AUR · alol](https://aur.archlinux.org/packages/alol) · [Download](https://github.com/Velmi1337/ALOL/releases/latest) · [Report a problem](https://github.com/Velmi1337/ALOL/issues) · [Telegram](https://t.me/alolinux)
 
 **ALOL 1.0.1 is a stable bugfix release.** It manages Arizona RP and Rodina RP environments on **Linux x86_64** through **Wine or Proton**.
 A Material 3 Expressive (MD3E) interface brings light/dark themes, Google Sans, separate game settings, mod management and a searchable operation log.
 Arizona nicknames are saved per server; Rodina asks for the name in-game.
+Available as **[alol on AUR](https://aur.archlinux.org/packages/alol)**, AppImage and native Arch/CachyOS and Fedora packages.
 It is an independent project and is not affiliated with Arizona Games. The game and Windows components are not bundled.
 
 <img src="docs/screenshots/main.png" width="760" alt="ALOL native Linux launcher showing server selection, nickname, game launch and settings">

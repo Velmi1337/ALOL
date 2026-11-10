@@ -1,4 +1,4 @@
-# ALOL 1.0.1 — исправления модов и меню F11 + AppImage
+# ALOL 1.0.1 — исправления, AppImage и AUR
 
 Обновление стабильной версии для Arizona RP и Родины RP на Linux.
 
@@ -21,6 +21,19 @@ chmod +x alol-1.0.1-x86_64.AppImage
 Если FUSE недоступен: `./alol-1.0.1-x86_64.AppImage --appimage-extract-and-run`.
 Для игры по-прежнему нужны UMU/Proton либо Wine, winetricks, curl и подходящие 32/64-битные драйверы. AppImage не включает игры или Proton.
 
+## Установка из AUR
+
+ALOL опубликован в **[AUR под именем alol](https://aur.archlinux.org/packages/alol)**.
+Для Arch Linux и CachyOS:
+
+```sh
+yay -S alol
+# или
+paru -S alol
+```
+
+Нужны включённый `multilib` и `base-devel`. Пакет собирается из исходников стабильного релиза с проверкой SHA256; зависимости устанавливает AUR-помощник. Обновление — `yay -Syu` или `paru -Syu`.
+
 ## Пакеты
 
 **Arch Linux / CachyOS:** `sudo pacman -U ./alol-1.0.1-1-x86_64.pkg.tar.zst`
@@ -31,4 +44,4 @@ chmod +x alol-1.0.1-x86_64.AppImage
 
 Профили и настройки сохраняются. Игры, префиксы, личные данные и журналы в релиз не входят.
 
-[Руководство](https://github.com/Velmi1337/ALOL/blob/v1.0.1/docs/guide.md) · [Telegram](https://t.me/alolinux) · [Сообщить об ошибке](https://github.com/Velmi1337/ALOL/issues)
+[Руководство](https://github.com/Velmi1337/ALOL/blob/main/docs/guide.md) · [Telegram](https://t.me/alolinux) · [Сообщить об ошибке](https://github.com/Velmi1337/ALOL/issues)

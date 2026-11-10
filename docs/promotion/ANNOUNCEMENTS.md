@@ -6,11 +6,11 @@ For manual posting only where community rules permit project announcements.
 
 ## Русский
 
-**ALOL — нативный лаунчер Arizona RP для Linux на Rust и GTK 3**
+**ALOL — нативный лаунчер Arizona RP и Родины RP для Linux на Rust и GTK 3**
 
-Делаю ALOL (Arizona Launcher On Linux): лаунчер для управления окружением Arizona RP на Linux x86_64 через Wine или Proton.
+Делаю ALOL (Arizona Launcher On Linux): лаунчер для управления окружением Arizona RP и Родины RP на Linux x86_64 через Wine или Proton.
 Есть выбор сервера, отдельные никнеймы, инструменты модов, настройки и починка типичных проблем окружения.
-В релизах доступны пакеты для Arch/CachyOS и Fedora, а также другие описанные варианты установки.
+ALOL доступен в AUR под именем alol: `yay -S alol` или `paru -S alol`. В релизах также есть AppImage и пакеты Arch/CachyOS и Fedora. Для AUR нужны multilib и base-devel. Интерфейс выполнен в стиле Material 3 Expressive.
 
 Игра и Windows-компоненты не входят в пакет. Для загрузки и обновления игры используется официальный лаунчер.
 Совместимость зависит от рантайма, драйверов и настройки дистрибутива. ALOL не связан с Arizona Games.
@@ -19,17 +19,18 @@ For manual posting only where community rules permit project announcements.
 Wine/Proton, версия ALOL и конкретные шаги с результатом.
 
 - Описание: https://velmi1337.github.io/ru/alol/
+- AUR: https://aur.archlinux.org/packages/alol
 - Скачать: https://github.com/Velmi1337/ALOL/releases/latest
 - Код/ошибки: https://github.com/Velmi1337/ALOL
 - Новости: https://t.me/alolinux
 
 ## English
 
-**ALOL: a native Arizona RP launcher for Linux, built with Rust and GTK 3**
+**ALOL: a native Arizona RP and Rodina RP launcher for Linux, built with Rust and GTK 3**
 
-I am building ALOL (Arizona Launcher On Linux), a launcher for managing an Arizona RP environment on Linux x86_64 through Wine or Proton.
+I am building ALOL (Arizona Launcher On Linux), a launcher for managing Arizona RP and Rodina RP environments on Linux x86_64 through Wine or Proton.
 It includes server selection, per-server nicknames, mod tools, game settings and common environment repair.
-Published releases provide Arch/CachyOS and Fedora packages, with other documented installation options.
+ALOL is available as alol on AUR: `yay -S alol` or `paru -S alol`. Releases also provide AppImage and Arch/CachyOS and Fedora packages. AUR requires multilib and base-devel. The interface follows Material 3 Expressive.
 
 The game and Windows components are not bundled. The official launcher handles game downloads and updates.
 Compatibility depends on runtime, drivers and distribution setup. ALOL is independent of Arizona Games.
@@ -38,6 +39,7 @@ I would appreciate reports from Linux players. Include the distribution, GPU/dri
 ALOL version and concrete reproduction steps/results.
 
 - Overview: https://velmi1337.github.io/alol/
+- AUR: https://aur.archlinux.org/packages/alol
 - Download: https://github.com/Velmi1337/ALOL/releases/latest
 - Source/issues: https://github.com/Velmi1337/ALOL
 - Existing news channel: https://t.me/alolinux
