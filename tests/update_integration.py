@@ -93,6 +93,45 @@ shutil.copyfile(source, a[a.index('--output') + 1])
         self.run_alol("self-update", success=False)
         self.assertEqual(self.installed.read_bytes(), before)
 
+    def portable_fixture(self, valid=True):
+        outer=self.installed
+        internal=self.root/'AppDir/usr/bin/alol'
+        internal.parent.mkdir(parents=True)
+        shutil.copyfile(self.installed,internal);internal.chmod(0o755)
+        self.installed=internal
+        self.env.update(ALOL_APPIMAGE_ACTIVE='1',APPDIR=str(self.root/'AppDir'),APPIMAGE=str(outer))
+        contents=bytearray(self.payload.read_bytes())
+        if valid:contents[8:11]=b'AI\x02'
+        self.payload.write_bytes(contents)
+        name=f'alol-{VERSION}-x86_64.AppImage'
+        self.release['assets']=[{'name':name,'size':len(contents),
+            'digest':'sha256:'+hashlib.sha256(contents).hexdigest()}]
+        self.write_release()
+        self.mapping.write_text(json.dumps({API:str(self.release_file),
+            f'https://github.com/Velmi1337/ALOL/releases/download/v{VERSION}/{name}':str(self.payload)}))
+        return outer
+
+    def test_appimage_update_replaces_outer_image_and_keeps_mounted_payload(self):
+        outer=self.portable_fixture()
+        before=self.installed.read_bytes()
+        self.run_alol('self-update',VERSION)
+        self.assertEqual(outer.read_bytes(),self.payload.read_bytes())
+        self.assertEqual(self.installed.read_bytes(),before)
+        self.assertEqual(list(outer.parent.glob('.alol-update-*')),[])
+
+    def test_appimage_update_rejects_a_standalone_elf_with_valid_checksum(self):
+        outer=self.portable_fixture(valid=False)
+        before=outer.read_bytes()
+        result=self.run_alol('self-update',VERSION,success=False)
+        self.assertIn('AppImage',result.stderr)
+        self.assertEqual(outer.read_bytes(),before)
+
+    def test_unrelated_appimage_environment_does_not_redirect_update(self):
+        other=self.root/'other.AppImage';other.write_bytes(b'keep')
+        self.run_alol('self-update',VERSION,APPIMAGE=str(other),APPDIR=str(self.root),ALOL_APPIMAGE_ACTIVE='1')
+        self.assertEqual(other.read_bytes(),b'keep')
+        self.assertEqual(self.installed.read_bytes(),self.payload.read_bytes())
+
     def test_missing_asset_and_unsafe_tag_do_not_install(self):
         before = self.installed.read_bytes()
         self.release["assets"][0]["name"] = "../alol"

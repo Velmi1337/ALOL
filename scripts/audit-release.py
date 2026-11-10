@@ -7,7 +7,10 @@ import re
 import stat
 import subprocess
 import tarfile
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 from importlib.util import module_from_spec, spec_from_file_location
 

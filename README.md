@@ -1,4 +1,4 @@
-<!-- Project documentation for ALOL 1.0.0. -->
+<!-- Project documentation for ALOL 1.0.1. -->
 <div align="center">
 
 <img src="assets/alol.svg" width="80" height="80" alt="Логотип ALOL">
@@ -7,7 +7,7 @@
 
 <p>Arizona Launcher On Linux</p>
 <p><a href="README_EN.md">English</a> · <a href="https://velmi1337.github.io/ru/alol/">Страница проекта</a></p>
-<p>Первый стабильный релиз 1.0.0 · нативный лаунчер на Rust и GTK 3 с интерфейсом Material 3 Expressive (MD3E).</p>
+<p>Стабильная версия 1.0.1 · нативный лаунчер на Rust и GTK 3 с интерфейсом Material 3 Expressive (MD3E).</p>
 
 <p>
   <a href="https://github.com/Velmi1337/ALOL/releases/latest"><strong>Скачать</strong></a> ·
@@ -18,7 +18,7 @@
 
 </div>
 
-**ALOL 1.0.0 — первый стабильный релиз.** Две игры в одном окне: **Arizona RP** и
+**ALOL 1.0.1 — исправления модов и меню F11.** Две игры в одном окне: **Arizona RP** и
 **Родина RP**. Новый интерфейс **Material 3 Expressive**, светлая и тёмная темы,
 управление модами и понятный журнал операций.
 
@@ -30,7 +30,7 @@
 ### Arch Linux / CachyOS
 
 ```sh
-sudo pacman -U ./alol-1.0.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./alol-1.0.1-1-x86_64.pkg.tar.zst
 ```
 
 Нужны включённый `multilib` и подходящие 32/64-битные графические драйверы.
@@ -38,13 +38,27 @@ sudo pacman -U ./alol-1.0.0-1-x86_64.pkg.tar.zst
 ### Fedora 44+
 
 ```sh
-sudo dnf install ./alol-1.0.0-1.fc44.x86_64.rpm
+sudo dnf install ./alol-1.0.1-1.fc44.x86_64.rpm
 ```
 
 RPM установит Wine и winetricks. Системная русская локаль не требуется. GE-Proton доступен при установленном UMU.
 
 Откройте **ALOL** в меню приложений или выполните `alol`.
 [Другие способы установки и сборка из исходников →](docs/installation.md)
+
+### AppImage
+
+Переносимая сборка x86_64 для Linux с glibc 2.35+ (Ubuntu 22.04 и новее):
+
+```sh
+chmod +x alol-1.0.1-x86_64.AppImage
+./alol-1.0.1-x86_64.AppImage
+```
+
+Библиотеки интерфейса включены. Для игры нужны установленные UMU/Proton или Wine,
+winetricks, curl и подходящие драйверы. AppImage не включает игры и Proton.
+Если FUSE недоступен, добавьте `--appimage-extract-and-run` к команде запуска.
+Обновления из окна ALOL заменяют весь AppImage, сохраняя профили.
 
 ## Что умеет ALOL
 

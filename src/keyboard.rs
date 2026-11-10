@@ -110,7 +110,7 @@ impl LayoutSync {
                 fs::write(&temporary, MONITOR).map_err(|error| error.to_string())?;
                 fs::rename(&temporary, &script).map_err(|error| error.to_string())?;
             }
-            Command::new("python3")
+            crate::portable::command("python3")
                 .arg(&script)
                 .arg(&path)
                 .stdin(Stdio::piped())

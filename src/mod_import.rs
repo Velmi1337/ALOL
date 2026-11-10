@@ -96,8 +96,13 @@ fn gather(
                     .to_ascii_lowercase()
                     .as_str(),
             )
-            && relevant[0].file_name() != "lib"
-            && relevant[0].file_name() != "config"
+            && !["lib", "config", "resource", "resources"].contains(
+                &relevant[0]
+                    .file_name()
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .as_str(),
+            )
         {
             base = relevant[0].path();
         } else {
@@ -216,6 +221,7 @@ pub fn plan(raw: &Path, stage: &Path, game: &Path, slug: &str, mode: &str) -> Re
         let destination = if mode != "auto" {
             match mode {
                 "root" => relative.clone(),
+                _ if first == mode => relative.clone(),
                 "modloader" => PathBuf::from("modloader").join(slug).join(&relative),
                 _ => PathBuf::from(mode).join(&relative),
             }
@@ -325,7 +331,10 @@ pub fn plan(raw: &Path, stage: &Path, game: &Path, slug: &str, mode: &str) -> Re
     let mut queue: Vec<_> = plan
         .entries
         .iter()
-        .filter(|(_, p)| p.parent() == Some(Path::new("moonloader")))
+        .filter(|(_, p)| {
+            p.parent()
+                .is_some_and(|p| p.to_string_lossy().eq_ignore_ascii_case("moonloader"))
+        })
         .map(|(s, _)| s.clone())
         .collect();
     let mut visited = BTreeSet::new();
@@ -352,6 +361,9 @@ pub fn plan(raw: &Path, stage: &Path, game: &Path, slug: &str, mode: &str) -> Re
                 "ffi",
                 "bit",
                 "jit",
+                "jit.util",
+                "jit.opt",
+                "jit.profile",
                 "table",
                 "string",
                 "math",
@@ -364,6 +376,10 @@ pub fn plan(raw: &Path, stage: &Path, game: &Path, slug: &str, mode: &str) -> Re
                 "moonloader",
                 "memory",
                 "sampfuncs",
+                // MoonLoader preloads inicfg from MoonLoader.asi; unlike its
+                // file-backed libraries it needs no moonloader/lib/inicfg.lua.
+                // Keep the loader dependency above, not a fictitious file path.
+                "inicfg",
             ]
             .contains(&module.as_str())
             {
@@ -376,6 +392,7 @@ pub fn plan(raw: &Path, stage: &Path, game: &Path, slug: &str, mode: &str) -> Re
                 format!("moonloader/lib/{relative}.luac"),
                 format!("moonloader/lib/{relative}.dll"),
                 format!("moonloader/lib/{relative}/init.lua"),
+                format!("moonloader/lib/{relative}/init.luac"),
             ];
             let found = options.iter().find_map(|p| {
                 destinations
@@ -405,56 +422,89 @@ fn requires(text: &str) -> BTreeSet<String> {
     let b = text.as_bytes();
     let mut i = 0;
     let mut result = BTreeSet::new();
+    let mut previous = None;
     while i < b.len() {
-        if b[i..].starts_with(b"--") {
-            i += 2;
-            if let Some(end) = long_string_end(b, i) {
-                i = end;
-            } else {
-                while i < b.len() && b[i] != b'\n' {
-                    i += 1;
-                }
-            }
-        } else if let Some(end) = long_string_end(b, i) {
+        i = skip_trivia(b, i);
+        if i == b.len() {
+            break;
+        }
+        if let Some(end) = long_string_end(b, i) {
             i = end;
+            previous = Some(b']');
         } else if b[i] == b'\'' || b[i] == b'"' {
             i = quoted_end(b, i);
+            previous = Some(b'\'');
         } else if b[i..].starts_with(b"require")
+            && !matches!(previous, Some(b'.' | b':'))
             && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b"_.:".contains(&b[i - 1])))
             && b.get(i + 7)
                 .is_none_or(|c| !(c.is_ascii_alphanumeric() || *c == b'_'))
         {
-            i += 7;
-            while b.get(i).is_some_and(u8::is_ascii_whitespace) {
-                i += 1;
+            i = skip_trivia(b, i + 7);
+            let parenthesized = b.get(i) == Some(&b'(');
+            if parenthesized {
+                i = skip_trivia(b, i + 1);
             }
-            if b.get(i) == Some(&b'(') {
-                i += 1;
-                while b.get(i).is_some_and(u8::is_ascii_whitespace) {
-                    i += 1;
-                }
-            }
-            if b.get(i).is_some_and(|c| *c == b'\'' || *c == b'"') {
-                let end = quoted_end(b, i);
-                if end > i + 1 && end <= b.len() && b[end - 1] == b[i] {
-                    let module = &text[i + 1..end - 1];
-                    if !module.is_empty()
-                        && module.len() < 200
-                        && module
-                            .bytes()
-                            .all(|c| c.is_ascii_alphanumeric() || b"_./-".contains(&c))
-                        && !module.contains("..")
-                    {
-                        result.insert(module.into());
-                    }
+            if let Some((module, end)) = literal(text, i) {
+                // require('name' .. suffix) is dynamic. A bare string call,
+                // however, ends at the string, even if an operator follows it.
+                let next = skip_trivia(b, end);
+                if (!parenthesized || matches!(b.get(next), Some(b')' | b',')))
+                    && !module.is_empty()
+                    && module.len() < 200
+                    && module
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"_./-".contains(&c))
+                    && !module.contains("..")
+                {
+                    result.insert(module.into());
                 }
                 i = end;
             }
+            previous = Some(b'e');
         } else {
+            previous = Some(b[i]);
             i += 1;
         }
     }
     result
+}
+fn skip_trivia(b: &[u8], mut i: usize) -> usize {
+    loop {
+        while b.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        if !b[i..].starts_with(b"--") {
+            return i;
+        }
+        i += 2;
+        if let Some(end) = long_string_end(b, i) {
+            i = end;
+        } else {
+            while i < b.len() && !b"\r\n".contains(&b[i]) {
+                i += 1;
+            }
+        }
+    }
+}
+fn literal(text: &str, start: usize) -> Option<(&str, usize)> {
+    let b = text.as_bytes();
+    if matches!(b.get(start), Some(b'\'' | b'"')) {
+        let end = quoted_end(b, start);
+        return (end > start + 1 && b[end - 1] == b[start])
+            .then(|| (&text[start + 1..end - 1], end));
+    }
+    let end = long_string_end(b, start)?;
+    let opening = b[start + 1..].iter().position(|c| *c != b'=')? + 2;
+    let closing = end.checked_sub(opening)?;
+    if closing < start + opening
+        || b[closing] != b']'
+        || b[end - 1] != b']'
+        || !b[closing + 1..end - 1].iter().all(|c| *c == b'=')
+    {
+        return None;
+    }
+    Some((&text[start + opening..closing], end))
 }
 fn quoted_end(b: &[u8], start: usize) -> usize {
     let mut i = start + 1;
@@ -550,5 +600,41 @@ mod tests {
             requires(t),
             ["encoding".into(), "samp.events".into()].into()
         );
+    }
+    #[test]
+    fn require_syntax_distinguishes_literals_from_dynamic_names() {
+        let text = r#"
+            require --[[ between tokens ]] ('helper' -- line comment
+            )
+            require [=[long.name]=]
+            require('dynamic.' .. suffix)
+            require [=[bare]=] .. suffix
+            object . -- member, not the global require
+                require 'fake'
+            object : require('fake2')
+        "#;
+        assert_eq!(
+            requires(text),
+            ["helper".into(), "long.name".into(), "bare".into()].into()
+        );
+        assert_eq!(
+            requires("-- comment\rrequire 'helper'"),
+            ["helper".into()].into()
+        );
+    }
+    #[test]
+    fn incomplete_requires_do_not_panic_or_create_dependencies() {
+        for text in [
+            "require",
+            "require(",
+            "require --",
+            "require 'unfinished",
+            "require [=[unfinished",
+            "require [=[",
+            "require('unfinished' ..",
+            "--[[",
+        ] {
+            assert!(requires(text).is_empty(), "{text}");
+        }
     }
 }

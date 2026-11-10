@@ -391,7 +391,7 @@ impl Settings {
     fn runner_command(&self, runner: &str, executable: &str) -> Command {
         if self.game_mode && is_game(executable) {
             if available("gamemoderun") {
-                let mut command = Command::new("gamemoderun");
+                let mut command = crate::portable::command("gamemoderun");
                 command.arg(runner);
                 return command;
             }
@@ -399,7 +399,7 @@ impl Settings {
                 "GameMode не установлен: запуск игры без него. Для включения установите пакет gamemode средствами дистрибутива."
             );
         }
-        Command::new(runner)
+        crate::portable::command(runner)
     }
 
     fn is_launcher(&self, executable: &str) -> bool {
@@ -1065,6 +1065,9 @@ fn ensure_language(s: &Settings, force: bool) -> Result<()> {
     if !s.prefix_ready() {
         return Err("Сначала подготовьте окружение".into());
     }
+    // AZRTC reads Segoe UI files directly, so registry font substitutions alone
+    // cannot prevent its ASCII-only fallback. Also upgrade existing v1 profiles.
+    crate::fonts::ensure_game_fonts(&s.prefix())?;
     let marker = s.prefix().join(".alol-language-ru-v1");
     if !force && marker.is_file() {
         return Ok(());
@@ -1124,7 +1127,7 @@ fn ensure_components(s: &Settings) -> Result<()> {
         if !available("winetricks") {
             return Err("Для установки компонентов нужен winetricks".into());
         }
-        let mut command = Command::new("winetricks");
+        let mut command = crate::portable::command("winetricks");
         crate::language::configure(&mut command);
         let status = command
             .env("WINEPREFIX", s.prefix())
@@ -1298,7 +1301,7 @@ pub fn doctor(s: &Settings) -> String {
         ("lspci", vec![]),
         ("df", vec!["-h", &s.prefix_root]),
     ] {
-        if let Ok(output) = Command::new(cmd).args(args).output() {
+        if let Ok(output) = crate::portable::command(cmd).args(args).output() {
             let text = String::from_utf8_lossy(&output.stdout);
             let filtered = if cmd == "lspci" {
                 text.lines()
@@ -1366,7 +1369,7 @@ pub fn open_log(action: &str, project: crate::project::Project) -> Result<File> 
         .mode(0o600)
         .open(&path)
         .map_err(|e| e.to_string())?;
-    let time = Command::new("date")
+    let time = crate::portable::command("date")
         .arg("+%Y-%m-%d %H:%M:%S")
         .output()
         .ok()

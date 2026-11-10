@@ -12,6 +12,32 @@ PROBE = r'''
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+static int check_game_fonts(void) {
+    const WCHAR *names[] = {L"segoeui.ttf", L"seguisb.ttf"};
+    for (int i=0; i<2; ++i) {
+        WCHAR path[MAX_PATH], face[128];
+        if (!GetWindowsDirectoryW(path, MAX_PATH)) return 20;
+        lstrcatW(path, L"\\Fonts\\"); lstrcatW(path, names[i]);
+        HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);
+        if (file==INVALID_HANDLE_VALUE) return 21;
+        CloseHandle(file);
+        if (!AddFontResourceExW(path,FR_PRIVATE,NULL)) return 22;
+        HDC dc=CreateCompatibleDC(NULL);
+        HFONT font=CreateFontW(-16,0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,0,0,0,0,L"Google Sans");
+        if (!dc || !font) return 23;
+        HGDIOBJ previous=SelectObject(dc,font);
+        WORD glyphs[16];
+        const WCHAR text[]=L"\x041d\x0430\x0441\x0442\x0440\x043e\x0439\x043a\x0438\x0401\x0451";
+        int count=lstrlenW(text);
+        if (GetGlyphIndicesW(dc,text,count,glyphs,GGI_MARK_NONEXISTING_GLYPHS)==GDI_ERROR) return 24;
+        for (int j=0; j<count; ++j) if (glyphs[j]==0xffff) return 25;
+        if (!GetTextFaceW(dc,128,face) || lstrcmpW(face,L"Google Sans")) return 26;
+        SelectObject(dc,previous); DeleteObject(font); DeleteDC(dc);
+        RemoveFontResourceExW(path,FR_PRIVATE,NULL);
+    }
+    puts("GAME_FONTS=readable CYRILLIC=passed");
+    return 0;
+}
 int main(void) {
     WCHAR name[85]; char system[256], user[256];
     GetSystemDefaultLocaleName(name,85);
@@ -19,7 +45,8 @@ int main(void) {
     GetUserDefaultLocaleName(name,85);
     WideCharToMultiByte(CP_UTF8,0,name,-1,user,sizeof(user),NULL,NULL);
     printf("ACP=%u OEMCP=%u SYSTEM=%s USER=%s\n",GetACP(),GetOEMCP(),system,user);
-    return GetACP()==1251 && GetOEMCP()==866 && !strcmp(system,"ru-RU") && !strcmp(user,"ru-RU") ? 0 : 10;
+    if (GetACP()!=1251 || GetOEMCP()!=866 || strcmp(system,"ru-RU") || strcmp(user,"ru-RU")) return 10;
+    return check_game_fonts();
 }
 '''
 
@@ -32,7 +59,7 @@ class RealWineLanguage(unittest.TestCase):
             root = Path(temporary)
             source = root/'probe.c'
             source.write_text(PROBE)
-            subprocess.run(['winegcc', '-m64', '-o', str(root/'probe.exe'), str(source)],
+            subprocess.run(['winegcc', '-m64', '-o', str(root/'probe.exe'), str(source), '-lgdi32'],
                            check=True, capture_output=True, timeout=60)
             for mode in ['automatic', 'no-localedef']:
                 with self.subTest(mode=mode):
@@ -76,6 +103,7 @@ class RealWineLanguage(unittest.TestCase):
                                                 capture_output=True, text=True, timeout=60)
                         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
                         self.assertIn('ACP=1251 OEMCP=866 SYSTEM=ru-RU USER=ru-RU', result.stdout)
+                        self.assertIn('GAME_FONTS=readable CYRILLIC=passed', result.stdout)
                     finally:
                         subprocess.run(['wineserver', '-k'], env=env, capture_output=True, timeout=15)
                         subprocess.run(['wineserver', '-w'], env=env, capture_output=True, timeout=15)

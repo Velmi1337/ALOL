@@ -1231,7 +1231,7 @@ impl App {
         match action {
             Action::About => self.show_about(),
             Action::ExternalLink(url) => {
-                Command::new("xdg-open")
+                crate::portable::command("xdg-open")
                     .arg(url)
                     .spawn()
                     .map_err(|e| e.to_string())?;
@@ -1309,7 +1309,7 @@ impl App {
             Action::LogFolder => {
                 let folder = core::log_file().parent().unwrap().to_path_buf();
                 std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
-                Command::new("xdg-open")
+                crate::portable::command("xdg-open")
                     .arg(folder)
                     .spawn()
                     .map_err(|e| e.to_string())?;
@@ -1333,9 +1333,11 @@ impl App {
                 }
                 if self.update_installed {
                     self.persist_player(true)?;
-                    Command::new(&self.executable)
-                        .spawn()
-                        .map_err(|e| e.to_string())?;
+                    crate::portable::command(
+                        crate::portable::executable().map_err(|e| e.to_string())?,
+                    )
+                    .spawn()
+                    .map_err(|e| e.to_string())?;
                     unsafe {
                         gtk_main_quit();
                     }
@@ -1410,7 +1412,7 @@ impl App {
                 }
             }
             Action::Website => {
-                Command::new("xdg-open")
+                crate::portable::command("xdg-open")
                     .arg(self.settings.project.website())
                     .spawn()
                     .map_err(|e| e.to_string())?;
@@ -1439,7 +1441,7 @@ impl App {
                     .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
                     .unwrap_or_else(|| self.settings.prefix());
                 std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
-                Command::new("xdg-open")
+                crate::portable::command("xdg-open")
                     .arg(path)
                     .spawn()
                     .map_err(|e| e.to_string())?;
@@ -2296,7 +2298,7 @@ impl App {
                     )
                 })
                 .unwrap_or_else(|| "https://github.com/Velmi1337/ALOL/releases/latest".into());
-            Command::new("xdg-open")
+            crate::portable::command("xdg-open")
                 .arg(url)
                 .spawn()
                 .map_err(|e| e.to_string())?;
@@ -2827,7 +2829,7 @@ fn theme_css(light: bool) -> String {
     format!("{LIGHT_COLORS}\n@define-color theme_bg_color{shared}")
 }
 fn register_interface_font() -> Result<()> {
-    let bytes = include_bytes!("../assets/fonts/GoogleSans.ttf");
+    let bytes = crate::fonts::GOOGLE_SANS;
     let path = core::data_dir().join("ui/GoogleSans.ttf");
     if std::fs::read(&path).ok().as_deref() != Some(bytes) {
         mods::atomic_bytes(&path, bytes)?;

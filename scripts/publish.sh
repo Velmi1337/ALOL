@@ -23,9 +23,11 @@ if [[ $alol_version == 1.0.0 ]]; then
     alol_title='ALOL 1.0.0 — первый стабильный релиз'
 fi
 alol_remote="https://github.com/$alol_repo.git"
+alol_commit=$(git rev-parse HEAD)
 if [[ $(git branch --show-current) != main ]] || \
-    [[ $(git rev-parse "v$alol_version^{commit}") != "$(git rev-parse HEAD)" ]]; then
-    echo 'Publish main with the version tag pointing to the audited commit.' >&2
+    { git rev-parse "v$alol_version^{commit}" >/dev/null 2>&1 && \
+      [[ $(git rev-parse "v$alol_version^{commit}") != "$alol_commit" ]]; }; then
+    echo 'Publish clean main; any existing version tag must point to HEAD.' >&2
     exit 1
 fi
 if git remote get-url origin >/dev/null 2>&1; then
@@ -40,7 +42,6 @@ if ! gh repo view "$alol_repo" --json name >/dev/null 2>&1; then
     gh repo create "$alol_repo" --public --description 'ALOL — Arizona Launcher On Linux. Native Rust launcher for Arch Linux, CachyOS and Fedora.'
 fi
 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin main
-git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin "v$alol_version"
 alol_artifacts=("dist/alol-$alol_version-1-x86_64.pkg.tar.zst" \
     "dist/alol-$alol_version-linux-x86_64" \
     "dist/alol-$alol_version.tar.gz" dist/PKGBUILD dist/alol.spec dist/SHA256SUMS LICENSE NOTICE \
@@ -54,27 +55,47 @@ if gh release view "v$alol_version" --repo "$alol_repo" >/dev/null 2>&1; then
     fi
     gh release upload "v$alol_version" --repo "$alol_repo" --clobber "${alol_artifacts[@]}"
 else
-    gh release create "v$alol_version" --repo "$alol_repo" --verify-tag \
+    gh release create "v$alol_version" --repo "$alol_repo" --target "$alol_commit" \
         --draft --title "$alol_title" --notes-file docs/release-notes.md "${alol_artifacts[@]}"
 fi
-printf '\nBuilding and testing the native Fedora RPM in GitHub Actions...\n'
-alol_dispatched_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-gh workflow run fedora-rpm.yml --repo "$alol_repo" --ref main -f "tag=v$alol_version"
-alol_run=''
-for alol_attempt in {1..20}; do
-    alol_run=$(gh run list --repo "$alol_repo" --workflow fedora-rpm.yml \
-        --event workflow_dispatch --commit "$(git rev-parse HEAD)" --created ">=$alol_dispatched_at" --limit 1 \
-        --json databaseId --jq '.[0].databaseId // empty')
-    if [[ -n $alol_run ]]; then break; fi
-    sleep 3
+printf '\nBuilding and testing Fedora and AppImage in GitHub Actions...\n'
+alol_runs=()
+for alol_workflow in fedora-rpm.yml appimage.yml; do
+    alol_dispatched_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    gh workflow run "$alol_workflow" --repo "$alol_repo" --ref main \
+        -f "tag=v$alol_version" -f "source_ref=$alol_commit"
+    alol_run=''
+    for alol_attempt in {1..20}; do
+        alol_run=$(gh run list --repo "$alol_repo" --workflow "$alol_workflow" \
+            --event workflow_dispatch --commit "$alol_commit" --created ">=$alol_dispatched_at" --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty')
+        if [[ -n $alol_run ]]; then break; fi
+        sleep 3
+    done
+    if [[ -z $alol_run ]]; then
+        echo 'CI build was dispatched but has not appeared yet. Check the Actions tab.' >&2
+        exit 1
+    fi
+    alol_runs+=("$alol_run")
 done
-if [[ -z $alol_run ]]; then
-    echo 'Fedora build was dispatched but its run has not appeared yet. Check the Actions tab.' >&2
-    exit 1
-fi
-gh run watch "$alol_run" --repo "$alol_repo" --exit-status --interval 10
+for alol_run in "${alol_runs[@]}"; do
+    gh run watch "$alol_run" --repo "$alol_repo" --exit-status --interval 10
+done
 gh release download "v$alol_version" --repo "$alol_repo" --dir dist --clobber \
     --pattern "alol-$alol_version-*.x86_64.rpm" --pattern SHA256SUMS.fedora
 python3 scripts/verify-fedora-download.py dist
-gh release edit "v$alol_version" --repo "$alol_repo" --draft=false --prerelease=false --latest --title "$alol_title"
+gh release download "v$alol_version" --repo "$alol_repo" --dir dist --clobber \
+    --pattern "alol-$alol_version-x86_64.AppImage" \
+    --pattern "alol-$alol_version-appimage-sources.tar.gz" --pattern SHA256SUMS.appimage
+python3 scripts/verify-appimage.py dist
+if [[ $(git rev-parse HEAD) != "$alol_commit" ]] || [[ -n $(git status --porcelain) ]]; then
+    echo 'Checkout changed during CI; refusing to tag or publish.' >&2
+    exit 1
+fi
+if ! git rev-parse "v$alol_version" >/dev/null 2>&1; then
+    git tag -a "v$alol_version" -m "ALOL $alol_version"
+fi
+git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin "v$alol_version"
+gh release edit "v$alol_version" --repo "$alol_repo" --draft=false --prerelease=false --latest \
+    --target "$alol_commit" --title "$alol_title" --notes-file docs/release-notes.md
 printf '\nPublished: https://github.com/%s/releases/tag/v%s\n' "$alol_repo" "$alol_version"

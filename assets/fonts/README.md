@@ -13,4 +13,11 @@ license are also included in the root NOTICE, which ships with packages and is
 embedded in `alol --license`. The font's license is separate from ALOL's code.
 
 The UI writes the embedded font to its own data directory and registers it with
-Fontconfig for this process only. No system fonts or Wine fonts are replaced.
+Fontconfig for this process only. No system fonts are replaced.
+
+For AZRTC's file-based game UI, ALOL also supplies missing `segoeui.ttf` and
+`seguisb.ttf` files inside its Wine prefix as aliases of this unmodified font.
+Existing font files and links, including case variants, are preserved. These
+aliases are Google Sans, not Microsoft Segoe UI; their internal names and bytes
+remain unchanged. Copyright, license and an explanation are written alongside
+the prefix's ALOL support files in `C:/alol/fonts/`.

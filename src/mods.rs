@@ -9,7 +9,6 @@ use std::{
     io::Write,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    process::Command,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -288,7 +287,11 @@ pub(crate) fn hash(p: &Path, algorithm: &str) -> Result<String> {
         "sha512" => ("sha512sum", 128),
         _ => return Err("Неизвестный алгоритм хеша".into()),
     };
-    let o = Command::new(tool).arg("--").arg(p).output().map_err(err)?;
+    let o = crate::portable::command(tool)
+        .arg("--")
+        .arg(p)
+        .output()
+        .map_err(err)?;
     let text = String::from_utf8_lossy(&o.stdout);
     let h = text.get(..len).unwrap_or("");
     if !o.status.success() || !h.bytes().all(|b| b.is_ascii_hexdigit()) || h.len() != len {
@@ -304,7 +307,7 @@ pub(crate) fn fetch_with_timeout(url: &str, out: &Path, limit: u64, seconds: u32
         return Err("Адрес загрузки должен использовать HTTPS".into());
     }
     fs::create_dir_all(out.parent().ok_or("Нет папки загрузки")?).map_err(err)?;
-    let status = Command::new("curl")
+    let status = crate::portable::command("curl")
         .args([
             "--fail",
             "--location",

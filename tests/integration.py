@@ -24,6 +24,8 @@ with open(os.environ['ALOL_TEST_TRACE'], 'a') as f:
         'winearch': os.environ.get('WINEARCH'), 'prime': os.environ.get('DRI_PRIME'),
         'install_path': os.environ.get('STEAM_COMPAT_INSTALL_PATH'), 'cwd': os.getcwd(),
         'lc_all': os.environ.get('LC_ALL'), 'host_lc_all': os.environ.get('HOST_LC_ALL'), 'lang': os.environ.get('LANG'), 'locpath': os.environ.get('LOCPATH'),
+        'ld_library_path': os.environ.get('LD_LIBRARY_PATH'), 'gtk_path': os.environ.get('GTK_PATH'),
+        'gdk_pixbuf': os.environ.get('GDK_PIXBUF_MODULE_FILE'),
         'xim': os.environ.get('XMODIFIERS'), 'gtk_im': os.environ.get('GTK_IM_MODULE'), 'qt_im': os.environ.get('QT_IM_MODULE'),
         'qt': os.environ.get('QT_QPA_PLATFORM'), 'gdk': os.environ.get('GDK_BACKEND'),
         'wayland': os.environ.get('WAYLAND_DISPLAY'), 'display': os.environ.get('DISPLAY'),
@@ -396,6 +398,63 @@ class Workflow(unittest.TestCase):
         before = len([c for c in self.calls() if c['args'][0]=='winetricks'])
         self.run_alol('repair-language')
         self.assertEqual(len([c for c in self.calls() if c['args'][0]=='winetricks']), before)
+
+    def test_game_font_fallbacks_upgrade_existing_language_profile_on_launch(self):
+        self.run_alol('install')
+        fonts=self.prefix/'drive_c/windows/Fonts'
+        bundled=(BINARY.parents[2]/'assets/fonts/GoogleSans.ttf').read_bytes()
+        for name in ('segoeui.ttf','seguisb.ttf'):
+            self.assertEqual((fonts/name).read_bytes(),bundled)
+        self.assertNotEqual((fonts/'segoeui.ttf').stat().st_ino,(fonts/'seguisb.ttf').stat().st_ino)
+        license=self.prefix/'drive_c/alol/fonts/OFL.md'
+        self.assertEqual(license.read_bytes(),(BINARY.parents[2]/'assets/fonts/OFL.md').read_bytes())
+        self.assertTrue((self.prefix/'.alol-language-ru-v1').is_file())
+        (fonts/'seguisb.ttf').unlink()
+        regular=(fonts/'segoeui.ttf').stat()
+        before=len([c for c in self.calls() if c['args']==[REG,'import',r'C:\alol\locale-ru.reg']])
+        self.run_alol('launch')
+        self.assertEqual((fonts/'seguisb.ttf').read_bytes(),bundled)
+        self.assertEqual((fonts/'segoeui.ttf').stat().st_mtime_ns,regular.st_mtime_ns)
+        self.assertEqual(len([c for c in self.calls() if c['args']==[REG,'import',r'C:\alol\locale-ru.reg']]),before)
+        self.assertFalse(list(fonts.glob('*.tmp')))
+
+    def test_game_font_fallbacks_preserve_existing_case_variants_and_links(self):
+        fonts=self.prefix/'drive_c/windows/Fonts';fonts.mkdir(parents=True)
+        (fonts/'SEGOEUI.TTF').write_bytes(b'existing user font')
+        external=self.root/'semibold.ttf';external.write_bytes(b'existing linked font')
+        (fonts/'seguisb.ttf').symlink_to(external)
+        self.run_alol('install')
+        self.assertEqual((fonts/'SEGOEUI.TTF').read_bytes(),b'existing user font')
+        self.assertFalse((fonts/'segoeui.ttf').exists())
+        self.assertTrue((fonts/'seguisb.ttf').is_symlink())
+        self.assertEqual(external.read_bytes(),b'existing linked font')
+
+    def test_game_font_fallback_aliases_can_be_changed_independently(self):
+        self.run_alol('install')
+        fonts=self.prefix/'drive_c/windows/Fonts'
+        semibold=(fonts/'seguisb.ttf').read_bytes()
+        (fonts/'segoeui.ttf').write_bytes(b'user replacement')
+        self.run_alol('repair-language')
+        self.assertEqual((fonts/'segoeui.ttf').read_bytes(),b'user replacement')
+        self.assertEqual((fonts/'seguisb.ttf').read_bytes(),semibold)
+
+    def test_game_font_fallbacks_do_not_write_through_a_linked_font_directory(self):
+        windows=self.prefix/'drive_c/windows';windows.mkdir(parents=True)
+        external=self.root/'external-fonts';external.mkdir()
+        (windows/'Fonts').symlink_to(external,target_is_directory=True)
+        self.run_alol('install',success=False)
+        self.assertEqual(list(external.iterdir()),[])
+
+    def test_appimage_library_environment_is_not_passed_to_wine(self):
+        self.run_alol('install',ALOL_APPIMAGE_ACTIVE='1',LD_LIBRARY_PATH='/appimage/lib',
+            GTK_PATH='/appimage/gtk',GDK_PIXBUF_MODULE_FILE='/appimage/loaders.cache',
+            ALOL_APPIMAGE_HOST_LD_LIBRARY_PATH='s/host/lib',
+            ALOL_APPIMAGE_HOST_GTK_PATH='s',ALOL_APPIMAGE_HOST_GDK_PIXBUF_MODULE_FILE='u')
+        for call in self.calls():
+            installer=call['args'][0]==str(self.installer)
+            self.assertEqual(call['ld_library_path'],None if installer else '/host/lib')
+            self.assertEqual(call['gtk_path'],None if installer else '')
+            self.assertIsNone(call['gdk_pixbuf'])
 
     def test_launcher_compatibility_uses_xwayland_without_dotfile_overrides(self):
         overrides = dict(DISPLAY=":123", WAYLAND_DISPLAY="wayland-test", XDG_SESSION_TYPE="wayland",

@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- English documentation for ALOL 1.0.0. -->
+<!-- English documentation for ALOL 1.0.1. -->
 # ALOL — Arizona RP and Rodina RP on Linux
 
 **Arizona Launcher On Linux. A native Rust and GTK 3 launcher.**
 
 [Русский](README.md) · [Project website](https://velmi1337.github.io/alol/) · [Download](https://github.com/Velmi1337/ALOL/releases/latest) · [Report a problem](https://github.com/Velmi1337/ALOL/issues) · [Telegram](https://t.me/alolinux)
 
-**ALOL 1.0.0 is the first stable release.** It manages Arizona RP and Rodina RP environments on **Linux x86_64** through **Wine or Proton**.
+**ALOL 1.0.1 is a stable bugfix release.** It manages Arizona RP and Rodina RP environments on **Linux x86_64** through **Wine or Proton**.
 A Material 3 Expressive (MD3E) interface brings light/dark themes, Google Sans, separate game settings, mod management and a searchable operation log.
 Arizona nicknames are saved per server; Rodina asks for the name in-game.
 It is an independent project and is not affiliated with Arizona Games. The game and Windows components are not bundled.
@@ -19,12 +19,12 @@ The published interface screenshots are in Russian.
 ## Install
 
 Choose a package from the [latest GitHub release](https://github.com/Velmi1337/ALOL/releases/latest).
-The commands below use the currently published `1.0.0` filenames; use the filename of the version you downloaded.
+The commands below use the currently published `1.0.1` filenames; use the filename of the version you downloaded.
 
 ### Arch Linux / CachyOS
 
 ```sh
-sudo pacman -U ./alol-1.0.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./alol-1.0.1-1-x86_64.pkg.tar.zst
 ```
 
 Enable `multilib` and install suitable 32-bit and 64-bit graphics drivers for your system.
@@ -32,7 +32,7 @@ Enable `multilib` and install suitable 32-bit and 64-bit graphics drivers for yo
 ### Fedora 44+
 
 ```sh
-sudo dnf install ./alol-1.0.0-1.fc44.x86_64.rpm
+sudo dnf install ./alol-1.0.1-1.fc44.x86_64.rpm
 ```
 
 The RPM installs its Wine and winetricks dependencies. A Russian system locale is not required.
@@ -43,6 +43,21 @@ See [installation instructions](docs/installation.md) for alternatives and build
 The detailed guides currently use Russian.
 
 ## First launch
+
+### Portable AppImage
+
+For Linux x86_64 with glibc 2.35 or newer (Ubuntu 22.04+):
+
+```sh
+chmod +x alol-1.0.1-x86_64.AppImage
+./alol-1.0.1-x86_64.AppImage
+```
+
+GTK libraries are bundled. Playing still requires UMU/Proton or Wine, winetricks,
+curl and graphics drivers. Game files and Proton are not bundled. Without FUSE,
+launch with `--appimage-extract-and-run`. In-app updates replace the whole AppImage.
+
+## First game launch
 
 1. Download the installer from the [official Arizona website](https://arizona-rp.com/).
 2. Select the installer `.exe` in ALOL and choose the install action to prepare the environment.

@@ -42,7 +42,7 @@ pub fn integrate_game(project: Project) -> Result<()> {
     }
     let executable = development_root()
         .map(|p| p.join("run-dev.sh"))
-        .or_else(|| env::current_exe().ok())
+        .or_else(|| crate::portable::executable().ok())
         .ok_or("Не найден ALOL")?;
     let icon_path = metadata_root().join("icons/hicolor/256x256/apps/alol-rodina.png");
     let bytes: &[u8] = include_bytes!("../assets/rodina.png");
@@ -92,7 +92,7 @@ fn metadata_root() -> PathBuf {
 pub fn integrate_arizona() -> Result<()> {
     let executable = development_root()
         .map(|p| p.join("run-dev.sh"))
-        .or_else(|| env::current_exe().ok())
+        .or_else(|| crate::portable::executable().ok())
         .ok_or("Не найден ALOL")?;
     let icon_path = metadata_root().join("icons/hicolor/256x256/apps/alol-arizona.png");
     if fs::read(&icon_path).ok().as_deref() != Some(ARIZONA_ICON) {
@@ -173,7 +173,7 @@ pub fn integrate_arizona() -> Result<()> {
 }
 
 fn development_root() -> Option<PathBuf> {
-    env::current_exe()
+    crate::portable::executable()
         .ok()?
         .ancestors()
         .find(|directory| {
@@ -259,7 +259,7 @@ pub fn integrate() -> Result<()> {
     if packaged && owned {
         fs::remove_file(&entry).map_err(|e| e.to_string())?;
     } else if !packaged && (previous.is_none() || owned) {
-        let executable = env::current_exe()
+        let executable = crate::portable::executable()
             .and_then(|p| p.canonicalize())
             .map_err(|e| e.to_string())?;
         let text = desktop_entry(&executable)?;

@@ -4,12 +4,7 @@ use crate::{
     json::{self, Value, object, string},
     mods,
 };
-use std::{
-    fs,
-    io::Write,
-    path::PathBuf,
-    process::{Command, Stdio},
-};
+use std::{fs, io::Write, path::PathBuf, process::Stdio};
 
 pub const RECIPE_TEXT: &str = include_str!("../runtime/base.json");
 pub const WRAPPER: &str = include_str!("../runtime/proton_wrapper.py");
@@ -75,7 +70,7 @@ pub fn prepare(settings: &Settings, select: bool) -> Result<()> {
         ("license", string(include_str!("../LICENSE"))),
         ("notice", string(include_str!("../NOTICE"))),
     ]);
-    let mut child = Command::new("python3")
+    let mut child = crate::portable::command("python3")
         .args([
             "-I",
             "-c",

@@ -1,6 +1,6 @@
 [package]
 name = "alol"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 description = "Arizona RP and Rodina RP on Linux — Material 3 Expressive launcher"
 license = "Apache-2.0"

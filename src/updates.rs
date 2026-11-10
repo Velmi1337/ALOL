@@ -12,7 +12,7 @@ use std::{
         unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -107,10 +107,12 @@ impl Release {
 
     fn asset(&self, kind: &InstallKind) -> Result<&Asset> {
         let binary = format!("alol-{}-linux-x86_64", self.version);
+        let image = format!("alol-{}-x86_64.AppImage", self.version);
         let arch = format!("alol-{}-1-x86_64.pkg.tar.zst", self.version);
         let rpm_prefix = format!("alol-{}-1.fc", self.version);
         self.assets.iter().find(|a| match kind {
             InstallKind::Local => a.name == binary,
+            InstallKind::AppImage => a.name == image,
             InstallKind::Arch => a.name == arch,
             InstallKind::Fedora => a.name.strip_prefix(&rpm_prefix).and_then(|n| n.strip_suffix(".x86_64.rpm")).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
         }).ok_or_else(|| "Файл обновления с SHA256 ещё не опубликован. Попробуйте проверить обновления позже.".into())
@@ -215,6 +217,7 @@ fn check_cached(interval: u64) -> Result<Option<Release>> {
 #[derive(Debug)]
 enum InstallKind {
     Local,
+    AppImage,
     Arch,
     Fedora,
 }
@@ -224,7 +227,10 @@ fn installation(executable: &Path) -> Result<InstallKind> {
         ("pacman", vec!["-Qoq"], InstallKind::Arch),
         ("rpm", vec!["-qf", "--qf", "%{NAME}"], InstallKind::Fedora),
     ] {
-        if let Ok(output) = Command::new(tool).args(args).arg(executable).output()
+        if let Ok(output) = crate::portable::command(tool)
+            .args(args)
+            .arg(executable)
+            .output()
             && output.status.success()
         {
             if String::from_utf8_lossy(&output.stdout).trim() == "alol" {
@@ -282,7 +288,8 @@ impl Drop for Lock {
 }
 
 fn binary_version(executable: &Path) -> Result<String> {
-    let output = Command::new(executable)
+    let output = crate::portable::command(executable)
+        .env("APPIMAGE_EXTRACT_AND_RUN", "1")
         .arg("--version")
         .stdin(Stdio::null())
         .output()
@@ -299,7 +306,7 @@ fn binary_version(executable: &Path) -> Result<String> {
     Ok(release_version.into())
 }
 
-fn replace_binary(source: &Path, executable: &Path, expected: &str) -> Result<()> {
+fn replace_binary(source: &Path, executable: &Path, expected: &str, appimage: bool) -> Result<()> {
     let parent = executable.parent().ok_or("Нет папки приложения")?;
     let temporary = parent.join(format!(
         ".alol-update-{}-{}.tmp",
@@ -312,6 +319,9 @@ fn replace_binary(source: &Path, executable: &Path, expected: &str) -> Result<()
         input.read_exact(&mut header).map_err(|e| e.to_string())?;
         if &header[..6] != b"\x7fELF\x02\x01" || header[18..20] != [0x3e, 0] {
             return Err("Обновление не является приложением ELF x86_64".into());
+        }
+        if appimage && &header[8..11] != b"AI\x02" {
+            return Err("Обновление не является AppImage типа 2".into());
         }
         let mut output = OpenOptions::new()
             .write(true)
@@ -343,7 +353,7 @@ pub fn install(expected: Option<&str>) -> Result<()> {
         return Err("Это рабочая копия проекта. Обновляйте её через Git и пересборку; версия из GitHub устанавливается отдельно.".into());
     }
     let _lock = Lock::acquire()?;
-    let executable = std::env::current_exe()
+    let executable = crate::portable::executable()
         .and_then(|p| p.canonicalize())
         .map_err(|e| e.to_string())?;
     let Some(release) = check(true)? else {
@@ -353,7 +363,10 @@ pub fn install(expected: Option<&str>) -> Result<()> {
     if expected.is_some_and(|v| v != release.version) {
         return Err("На GitHub появилась другая версия. Проверьте обновления ещё раз.".into());
     }
-    let kind = installation(&executable)?;
+    let kind = match installation(&executable)? {
+        InstallKind::Local if crate::portable::appimage().is_some() => InstallKind::AppImage,
+        kind => kind,
+    };
     let asset = release.asset(&kind)?;
     let stage = Staging::new()?;
     let path = stage.0.join(&asset.name);
@@ -373,7 +386,12 @@ pub fn install(expected: Option<&str>) -> Result<()> {
     }
     println!("Размер и SHA256 обновления проверены.");
     match kind {
-        InstallKind::Local => replace_binary(&path, &executable, &release.version)?,
+        InstallKind::Local | InstallKind::AppImage => replace_binary(
+            &path,
+            &executable,
+            &release.version,
+            matches!(kind, InstallKind::AppImage),
+        )?,
         InstallKind::Arch | InstallKind::Fedora => {
             let tool = if matches!(kind, InstallKind::Arch) {
                 "pacman"
@@ -385,7 +403,7 @@ pub fn install(expected: Option<&str>) -> Result<()> {
                 return Err("Для обновления пакета нужны pkexec и системный пакетный менеджер. Скачайте пакет из GitHub Releases.".into());
             }
             println!("Установка пакета: подтвердите системный запрос прав администратора.");
-            let status = Command::new("pkexec")
+            let status = crate::portable::command("pkexec")
                 .arg(tool_path)
                 .args(if matches!(kind, InstallKind::Arch) {
                     vec!["-U", "--noconfirm", "--"]

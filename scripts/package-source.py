@@ -9,7 +9,10 @@ import re
 import shutil
 import struct
 import tarfile
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1]

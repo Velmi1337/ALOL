@@ -7,6 +7,10 @@ on:
         description: Existing release tag to build
         required: true
         type: string
+      source_ref:
+        description: Exact source commit (defaults to release tag)
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -27,7 +31,7 @@ jobs:
         run: '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]'
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.source_ref || inputs.tag }}
           persist-credentials: false
       - name: Download and build the exact released source in Fedora
         shell: bash
@@ -53,6 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/verify-fedora-download.py "$RUNNER_TEMP/fedora-out" --archive "$RUNNER_TEMP/alol-source.tar.gz"
+          [[ $(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft) == true ]]
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             "$RUNNER_TEMP"/fedora-out/alol-*.x86_64.rpm \
             "$RUNNER_TEMP/fedora-out/alol.spec" "$RUNNER_TEMP/fedora-out/SHA256SUMS.fedora"

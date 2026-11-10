@@ -92,7 +92,7 @@ shutil.copyfile(mapping[url],args[args.index('--output')+1])
         package=self.archive('bundle.zip',{
             'Pack/mod.lua':b"local events = require 'samp.events'",
             'Pack/lib/samp/events.lua':b"local x = require 'helper'",
-            'Pack/lib/helper.lua':b'return {}',
+            'Pack/lib/helper.lua':b"local config = require 'inicfg'; return {}",
             'Pack/lib/native.dll':b'library',
             'Pack/config/mod/settings.ini':b'options',
             'Pack/extra.asi':b'ASI plugin',
@@ -125,6 +125,112 @@ shutil.copyfile(mapping[url],args[args.index('--output')+1])
         self.assertIn('nonexistent.lib',result.stdout)
         self.assertFalse((self.game/'moonloader/mod.lua').exists())
         self.assertEqual(self.states(),[])
+
+    def test_standalone_script_uses_moonloader_builtin_inicfg(self):
+        script=self.root/'settings.lua'
+        contents=b"local config = require 'inicfg'\nreturn config"
+        script.write_bytes(contents)
+        preview=self.run_alol('mods-preview',arguments=(script,))
+        self.assertNotIn('Не найдены Lua-библиотеки',preview.stdout)
+        self.assertFalse((self.game/'moonloader/settings.lua').exists())
+        self.assertEqual(self.states(),[])
+        self.add(script)
+        self.assertEqual((self.game/'moonloader/settings.lua').read_bytes(),contents)
+        self.assertFalse((self.game/'moonloader/lib/inicfg.lua').exists())
+        record=self.states()[0]
+        self.assertEqual(record['meta']['required_paths'],['moonloader.asi'])
+        self.run_alol('mods-remove',arguments=(record['id'],))
+        self.assertFalse((self.game/'moonloader/settings.lua').exists())
+        self.assertTrue((self.game/'MoonLoader.asi').is_file())
+
+    def test_builtin_inicfg_does_not_hide_missing_external_library(self):
+        script=self.root/'settings.lua'
+        script.write_bytes(b"require 'inicfg'\nrequire 'nonexistent.lib'")
+        result=self.add(script,success=False)
+        self.assertIn('Не найдены Lua-библиотеки: nonexistent.lib.',result.stdout)
+        self.assertNotIn('Не найдены Lua-библиотеки: inicfg',result.stdout)
+        self.assertFalse((self.game/'moonloader/settings.lua').exists())
+        self.assertEqual(self.states(),[])
+
+    def test_luajit_builtin_modules_need_no_external_files(self):
+        script=self.root/'jit.lua'
+        contents=b"require 'jit.util'\nrequire 'jit.opt'\nrequire 'jit.profile'"
+        script.write_bytes(contents)
+        self.add(script)
+        self.assertEqual((self.game/'moonloader/jit.lua').read_bytes(),contents)
+
+    def test_uppercase_moonloader_folder_still_checks_dependencies(self):
+        package=self.archive('uppercase.zip',{'MoonLoader/mod.lua':b"require 'nonexistent.lib'"})
+        result=self.add(package,success=False)
+        self.assertIn('nonexistent.lib',result.stdout)
+        self.assertFalse((self.game/'MoonLoader/mod.lua').exists())
+        self.assertEqual(self.states(),[])
+
+    def test_uppercase_library_archive_preserves_lib_folder(self):
+        package=self.archive('libraries.zip',{'LIB/helper.lua':b'return {}'})
+        self.add(package)
+        self.assertEqual((self.game/'moonloader/LIB/helper.lua').read_bytes(),b'return {}')
+        self.assertFalse((self.game/'moonloader/helper.lua').exists())
+        script=self.root/'mod.lua';script.write_bytes(b"require 'helper'")
+        self.add(script)
+        provider=next(v for v in self.states() if v['name']=='libraries')
+        self.run_alol('mods-disable',success=False,arguments=(provider['id'],))
+
+    def test_compiled_package_init_is_a_valid_dependency(self):
+        package=self.archive('compiled-library.zip',{
+            'mod.lua':b"require 'helper'",
+            'lib/helper/init.luac':b'\x1bLJ\x02binary',
+        })
+        result=self.add(package)
+        self.assertIn('скомпилированный Lua',result.stdout)
+        self.assertTrue((self.game/'moonloader/mod.lua').is_file())
+        self.assertTrue((self.game/'moonloader/lib/helper/init.luac').is_file())
+
+    def test_dynamic_and_member_require_do_not_create_fake_dependencies(self):
+        script=self.root/'dynamic.lua'
+        contents=b"local a=require('optional.' .. version)\nobject . require 'not_a_module'"
+        script.write_bytes(contents)
+        self.add(script)
+        self.assertEqual((self.game/'moonloader/dynamic.lua').read_bytes(),contents)
+
+    def test_require_comments_and_long_strings_still_check_missing_library(self):
+        for contents in (b"require --[[ comment ]] ('nonexistent.lib')",
+                         b"require [=[nonexistent.lib]=]"):
+            with self.subTest(contents=contents):
+                script=self.root/'mod.lua';script.write_bytes(contents)
+                result=self.add(script,success=False)
+                self.assertIn('nonexistent.lib',result.stdout)
+                self.assertFalse((self.game/'moonloader/mod.lua').exists())
+                self.assertEqual(self.states(),[])
+
+    def test_explicit_loader_location_does_not_duplicate_archive_folder(self):
+        for mode,relative,contents in (
+            ('moonloader','MoonLoader/mod.lua',b"require 'inicfg'"),
+            ('cleo','CLEO/mod.cs',b'CLEO script'),
+            ('modloader','modloader/pack/model.dff',b'model'),
+        ):
+            with self.subTest(mode=mode):
+                package=self.archive(mode+'.zip',{relative:contents})
+                self.add(package,mode)
+                installed=self.game/relative
+                self.assertTrue(installed.is_file(),relative)
+                self.assertEqual(installed.read_bytes(),contents)
+                record=self.states()[0]
+                self.run_alol('mods-remove',arguments=(record['id'],))
+                self.assertFalse(installed.exists())
+                self.assertEqual(self.states(),[])
+
+    def test_standalone_config_and_resource_archives_preserve_their_folders(self):
+        for relative in ('Config/settings.ini','Resource/icon.png','Resources/icons/mod.png'):
+            with self.subTest(relative=relative):
+                package=self.archive('resources.zip',{relative:b'content'})
+                self.add(package,'moonloader')
+                installed=self.game/'moonloader'/relative
+                self.assertEqual(installed.read_bytes(),b'content')
+                record=self.states()[0]
+                self.run_alol('mods-remove',arguments=(record['id'],))
+                self.assertFalse(installed.exists())
+                self.assertEqual(self.states(),[])
 
     def test_nested_dependencies_archive_is_unpacked_and_conflicts_are_rejected(self):
         buffer=io.BytesIO()
@@ -173,7 +279,7 @@ shutil.copyfile(mapping[url],args[args.index('--output')+1])
         fixtures=Path(self.env['ALOL_TEST_HTTP']); mapping=json.loads(fixtures.read_text())
         mapping['https://pc.az-ins.com/resource/mods/7/MoonLoader.asi']=str(self.root/'payload.bin')
         fixtures.write_text(json.dumps(mapping))
-        package=self.archive('needs-loader.zip',{'mod.lua':b'-- sample'})
+        package=self.archive('needs-loader.zip',{'mod.lua':b"require 'inicfg'"})
         self.add(package)
         self.assertEqual((self.game/'MoonLoader.asi').read_bytes(),content)
         self.assertEqual(len(self.states()),2)

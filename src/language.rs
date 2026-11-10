@@ -10,7 +10,7 @@ unsafe extern "C" {
 }
 
 fn usable(path: Option<&std::path::Path>) -> bool {
-    let mut command = Command::new("locale");
+    let mut command = crate::portable::command("locale");
     command.env("LC_ALL", RUSSIAN).arg("charmap");
     if let Some(path) = path {
         command.env("LOCPATH", path);
@@ -40,7 +40,7 @@ fn private_locale() -> Option<PathBuf> {
         let temporary = root.join(format!(".ru-{}", std::process::id()));
         // An interrupted build is never published as a complete locale.
         let _ = fs::remove_dir_all(&temporary);
-        let result = Command::new("localedef")
+        let result = crate::portable::command("localedef")
             .env("LC_ALL", "C")
             .env_remove("LOCPATH")
             .args(["--no-archive", "-i", "ru_RU", "-f", "UTF-8"])
