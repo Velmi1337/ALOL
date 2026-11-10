@@ -5,6 +5,7 @@ export DEBIAN_FRONTEND=noninteractive
 export CARGO_HOME=/opt/alol-cargo RUSTUP_HOME=/opt/alol-rustup
 export PATH="$CARGO_HOME/bin:$PATH"
 if [[ $(id -u) == 0 ]]; then
+sed -i 's|http://archive.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
 sed -n 's/^deb /deb-src /p' /etc/apt/sources.list > /etc/apt/sources.list.d/alol-sources.list
 apt-get update -qq
 apt-get install -y --no-install-recommends build-essential curl ca-certificates \
