@@ -69,4 +69,16 @@ impl Project {
             ],
         }
     }
+    pub fn game_cdns(self) -> [&'static str; 2] {
+        match self {
+            Self::Arizona => [
+                "https://pc.az-ins.com/release",
+                "https://arz-pc.react-group.tech/release",
+            ],
+            Self::Rodina => [
+                "https://pc.rod-ins.com/release",
+                "https://rod-pc.react-group.tech/release",
+            ],
+        }
+    }
 }

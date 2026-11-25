@@ -140,9 +140,48 @@ pub fn view(source: &str, query: &str, severity: i32, last_operation: bool) -> V
     result
 }
 
+pub(crate) fn operation_progress(raw: &str, proton: bool) -> Option<String> {
+    normalize(raw)
+        .lines()
+        .rev()
+        .take_while(|line| !line.starts_with("──────── ALOL ·"))
+        .find_map(|line| {
+            if let Some(stage) = line.strip_prefix("ALOL-ЭТАП: ") {
+                return Some(stage.into());
+            }
+            if proton {
+                if line.starts_with("INFO: Downloading steamrt") {
+                    return Some(
+                        "UMU скачивает Steam Runtime · это может занять несколько минут".into(),
+                    );
+                }
+                if line.starts_with("INFO: Updating steamrt")
+                    || line.starts_with("INFO: Setting up Unified Launcher")
+                {
+                    return Some("UMU подготавливает Steam Runtime".into());
+                }
+                if line.starts_with("INFO: Running '") && line.contains(" using runtime ") {
+                    return Some("Steam Runtime готов · продолжаем запуск".into());
+                }
+                if line.starts_with("INFO: umu-launcher version ") {
+                    return Some("UMU проверяет Steam Runtime".into());
+                }
+                if line.starts_with("pv-locale-gen: Generating locale ") {
+                    return Some("Steam Runtime готовит локаль игры".into());
+                }
+                if line.starts_with("Proton: Executable is a unix path, launching") {
+                    return Some("Proton передаёт запуск Wine".into());
+                }
+            }
+            None
+        })
+}
+
 pub fn operation_title(action: &str) -> &str {
     match action {
         "play" => "Запуск игры",
+        "game-update" => "Установка и обновление игры",
+        "game-check" => "Проверка игровых файлов",
         "launch" => "Официальный лаунчер",
         "install" => "Установка лаунчера",
         "prepare" | "runtime-prepare" => "Подготовка окружения",
@@ -247,6 +286,39 @@ mod tests {
             "Ошибка\n100%\nГотово"
         );
         assert_eq!(normalize("\x1b]0;title\x07ready\r"), "ready");
+    }
+    #[test]
+    fn proton_progress_reports_runtime_download_for_current_operation() {
+        let previous = "──────── ALOL · previous\nINFO: Downloading steamrt3 (old)\n";
+        assert_eq!(
+            operation_progress(&format!("{previous}──────── ALOL · current\n"), true),
+            None
+        );
+        let current = "──────── ALOL · current\nALOL-ЭТАП: Proton подготавливает запуск игры\nINFO: Downloading steamrt4 (4.0), please wait...\n";
+        assert_eq!(
+            operation_progress(current, true).as_deref(),
+            Some("UMU скачивает Steam Runtime · это может занять несколько минут")
+        );
+        assert_eq!(
+            operation_progress(current, false).as_deref(),
+            Some("Proton подготавливает запуск игры")
+        );
+        assert_eq!(
+            operation_progress(
+                &format!("{current}INFO: Running 'gta_sa.exe' using runtime 'steamrt4'\n"),
+                true
+            )
+            .as_deref(),
+            Some("Steam Runtime готов · продолжаем запуск")
+        );
+        assert_eq!(
+            operation_progress("INFO: umu-launcher version 1.4.3\n", true).as_deref(),
+            Some("UMU проверяет Steam Runtime")
+        );
+        assert_eq!(
+            operation_progress("pv-locale-gen: Generating locale ru_RU.UTF-8...\nProton: Executable is a unix path, launching with 'umu.exe'.\n", true).as_deref(),
+            Some("Proton передаёт запуск Wine")
+        );
     }
     #[test]
     fn search_severity_and_operation_filters_combine() {

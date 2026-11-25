@@ -10,7 +10,7 @@ use std::{
     fs,
     io::Read,
     net::IpAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 const SERVER_URLS: [&str; 2] = [
@@ -400,13 +400,16 @@ pub struct LaunchPlan {
 }
 pub fn game_executable(s: &Settings) -> Result<PathBuf> {
     let root = mods::game_dir(s)?;
-    for name in ["enb.exe", "gta-sa.exe", "gtasa.exe", "gta_sa.exe"] {
-        let p = root.join(name);
+    if crate::game_download::unfinished(&root) {
+        return Err("Установка игры не завершена. Продолжите её из ALOL.".into());
+    }
+    for name in crate::game_download::EXECUTABLES {
+        let p = mods::target(&root, Path::new(name))?;
         if p.is_file() {
             return Ok(p);
         }
     }
-    Err("Игровой EXE не найден. Откройте «Обновить игру» и загрузите файлы Arizona.".into())
+    Err("Игровой EXE не найден. Нажмите «Установить игру» в ALOL.".into())
 }
 pub fn plan(s: &Settings, profile: &PlayerProfile) -> Result<LaunchPlan> {
     if s.project != profile.project {
@@ -466,29 +469,29 @@ pub fn plan(s: &Settings, profile: &PlayerProfile) -> Result<LaunchPlan> {
     {
         args.extend(["-userId".into(), fingerprint]);
     }
-    if let Value::Object(mods) = value.get("installedMods").get(s.project.id()) {
-        for m in mods.values() {
-            let flag = m.get("flag").text();
-            if flag.is_empty() {
-                continue;
-            }
-            let tokens: Vec<_> = flag.split_whitespace().collect();
-            if tokens.len() == 1
-                && flag.starts_with('-')
-                && flag.len() <= 80
-                && flag
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-                && !["-c", "-h", "-p", "-n", "-mem", "-userId", "-cdn", "-z"]
-                    .iter()
-                    .any(|reserved| reserved.eq_ignore_ascii_case(&flag))
-                && !["-x", "-window", "-modern_scale", "-arizona", "-rodina"]
-                    .contains(&flag.as_str())
-                && !crate::game_options::OPTIONS.iter().any(|o| o.flag == flag)
-                && !args.contains(&flag)
-            {
-                args.push(flag);
-            }
+    let mut flags = mods::active_flags(s)?;
+    if let Value::Object(native_mods) = value.get("installedMods").get(s.project.id()) {
+        flags.extend(native_mods.values().map(|entry| entry.get("flag").text()));
+    }
+    for flag in flags {
+        if flag.is_empty() {
+            continue;
+        }
+        let tokens: Vec<_> = flag.split_whitespace().collect();
+        if tokens.len() == 1
+            && flag.starts_with('-')
+            && flag.len() <= 80
+            && flag
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+            && !["-c", "-h", "-p", "-n", "-mem", "-userId", "-cdn", "-z"]
+                .iter()
+                .any(|reserved| reserved.eq_ignore_ascii_case(&flag))
+            && !["-x", "-window", "-modern_scale", "-arizona", "-rodina"].contains(&flag.as_str())
+            && !crate::game_options::OPTIONS.iter().any(|o| o.flag == flag)
+            && !args.contains(&flag)
+        {
+            args.push(flag);
         }
     }
     args.extend(["-cdn".into(), "0,0,0".into()]);

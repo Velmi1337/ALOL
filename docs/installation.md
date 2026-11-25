@@ -22,26 +22,26 @@ paru -S alol
 
 ## AppImage
 
-Скачайте `alol-1.0.1-x86_64.AppImage` из релиза. Нужен Linux x86_64 с glibc 2.35+
+Скачайте `alol-1.1.0-x86_64.AppImage` из релиза. Нужен Linux x86_64 с glibc 2.35+
 (Ubuntu 22.04+, актуальные Arch/CachyOS, Fedora). Выдайте право на запуск:
 
 ```sh
-chmod +x alol-1.0.1-x86_64.AppImage
-./alol-1.0.1-x86_64.AppImage
+chmod +x alol-1.1.0-x86_64.AppImage
+./alol-1.1.0-x86_64.AppImage
 ```
 
 При недоступном FUSE используйте:
 
 ```sh
-./alol-1.0.1-x86_64.AppImage --appimage-extract-and-run
+./alol-1.1.0-x86_64.AppImage --appimage-extract-and-run
 ```
 
 GTK и библиотеки интерфейса включены; UMU/Proton либо Wine, winetricks, curl,
-средства SHA256 и графические драйверы нужны в системе. Файлы игры загружаются
-официальным лаунчером. AppImage использует обычный пользовательский профиль ALOL
+средства SHA256 и графические драйверы нужны в системе. ALOL сам скачивает файлы
+игры с серверов Arizona. AppImage использует обычный пользовательский профиль ALOL
 и обновляется из окна программы целиком. Папка с AppImage должна быть доступна
 для записи. Контрольные суммы — `SHA256SUMS.appimage`; исходники библиотек и их
-лицензии доступны в `alol-1.0.1-appimage-sources.tar.gz` и внутри AppImage.
+лицензии доступны в `alol-1.1.0-appimage-sources.tar.gz` и внутри AppImage.
 
 ## Arch Linux / CachyOS
 
@@ -52,7 +52,7 @@ GTK и библиотеки интерфейса включены; UMU/Proton л
 Скачайте `.pkg.tar.zst` и установите через pacman:
 
 ```sh
-sudo pacman -U ./alol-1.0.1-1-x86_64.pkg.tar.zst
+sudo pacman -U ./alol-1.1.0-1-x86_64.pkg.tar.zst
 alol
 ```
 
@@ -95,7 +95,7 @@ cd ALOL
 [GitHub Releases](https://github.com/Velmi1337/ALOL/releases) скачайте RPM:
 
 ```sh
-sudo dnf install ./alol-1.0.1-1.fc44.x86_64.rpm
+sudo dnf install ./alol-1.1.0-1.fc44.x86_64.rpm
 alol
 ```
 

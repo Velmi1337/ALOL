@@ -83,6 +83,24 @@ pub fn configure(command: &mut Command) {
         // inherited LC_CTYPE=C.UTF-8 from silently restoring ACP 1252 in UMU.
         .env("HOST_LC_ALL", RUSSIAN)
         .env("LANGUAGE", "ru_RU:ru");
+    // Pressure Vessel also examines each inherited category and may generate
+    // unused locales, even though LC_ALL already overrides those categories.
+    for category in [
+        "LC_ADDRESS",
+        "LC_COLLATE",
+        "LC_CTYPE",
+        "LC_IDENTIFICATION",
+        "LC_MEASUREMENT",
+        "LC_MESSAGES",
+        "LC_MONETARY",
+        "LC_NAME",
+        "LC_NUMERIC",
+        "LC_PAPER",
+        "LC_TELEPHONE",
+        "LC_TIME",
+    ] {
+        command.env_remove(category);
+    }
     if let Some(path) = PRIVATE.get_or_init(private_locale) {
         command.env("LOCPATH", path);
     }

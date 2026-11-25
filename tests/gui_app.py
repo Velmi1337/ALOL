@@ -20,6 +20,7 @@ PROBE = r'''
 #include <stdlib.h>
 #include <string.h>
 static int ticks, clicked, unexpected;
+static int initial_play_font_size;
 static GtkWidget *find(GtkWidget *w, const char *name, const char *button) {
     if (name && !strcmp(gtk_widget_get_name(w), name)) return w;
     if (button && GTK_IS_SWITCH(w) && atk_object_get_name(gtk_widget_get_accessible(w)) &&
@@ -191,8 +192,38 @@ static gboolean inspect(gpointer unused) {
         gtk_style_context_get_background_color(gtk_widget_get_style_context(main), GTK_STATE_FLAG_NORMAL, &bg);
         if (ticks == 8 ? bg.red > 0.2 : bg.red < 0.8) unexpected = 1;
         if (!gtk_switch_get_active(GTK_SWITCH(find(main, "alol-fps-hud", NULL)))) unexpected = 1;
-        if (ticks == 6) gtk_combo_box_set_active(GTK_COMBO_BOX(find(main, "alol-ui-theme", NULL)), 0);
-        if (ticks == 8) gtk_combo_box_set_active(GTK_COMBO_BOX(find(main, "alol-ui-theme", NULL)), 1);
+        if (ticks == 6) {
+            PangoFontDescription *font = NULL;
+            gtk_style_context_get(gtk_widget_get_style_context(find(main, "alol-play", NULL)),
+                                  GTK_STATE_FLAG_NORMAL, "font", &font, NULL);
+            initial_play_font_size = pango_font_description_get_size(font);
+            pango_font_description_free(font);
+            gtk_combo_box_set_active(GTK_COMBO_BOX(find(main, "alol-ui-theme", NULL)), 0);
+            gtk_combo_box_set_active(GTK_COMBO_BOX(find(main, "alol-ui-accent", NULL)), 2);
+        }
+        if (ticks == 8) {
+            gtk_combo_box_set_active(GTK_COMBO_BOX(find(main, "alol-ui-theme", NULL)), 1);
+            gtk_combo_box_set_active(GTK_COMBO_BOX(find(main, "alol-ui-accent", NULL)), 4);
+            gtk_combo_box_set_active(GTK_COMBO_BOX(find(main, "alol-ui-text-scale", NULL)), 2);
+            gtk_switch_set_active(GTK_SWITCH(find(main, "alol-ui-bottom-navigation", NULL)), TRUE);
+            gtk_window_resize(GTK_WINDOW(main), 960, 780);
+        }
+        if (ticks == 10) {
+            PangoFontDescription *font = NULL;
+            GtkStyleContext *play = gtk_widget_get_style_context(find(main, "alol-play", NULL));
+            gtk_style_context_get(play, GTK_STATE_FLAG_NORMAL, "font", &font, NULL);
+            if (pango_font_description_get_size(font) <= initial_play_font_size) unexpected = 1;
+            pango_font_description_free(font);
+            GdkRGBA primary, rose;
+            gdk_rgba_parse(&rose, "#963954");
+            if (!gtk_style_context_lookup_color(play, "md_primary", &primary) ||
+                !gdk_rgba_equal(&primary, &rose)) unexpected = 1;
+            GtkWidget *shell = find(main, "alol-shell", NULL);
+            GList *children = gtk_container_get_children(GTK_CONTAINER(shell));
+            if (gtk_orientable_get_orientation(GTK_ORIENTABLE(shell)) != GTK_ORIENTATION_VERTICAL ||
+                g_list_last(children)->data != find(main, "alol-navigation", NULL)) unexpected = 1;
+            g_list_free(children);
+        }
     }
     if (mode == 14 && ticks == 4) {
         if (!gtk_accel_groups_activate(G_OBJECT(main), GDK_KEY_3, GDK_CONTROL_MASK)) unexpected = 1;
@@ -308,6 +339,28 @@ static gboolean inspect(gpointer unused) {
         }
         gtk_dialog_response(GTK_DIALOG(dialog),GTK_RESPONSE_CLOSE);
     }
+    if (mode == 19 && ticks == 4) {
+        GtkWidget *install = find(main, NULL, "Установить игру");
+        GtkWidget *official = find(main, NULL, "Открыть лаунчер Arizona");
+        if (!install || !official || !gtk_widget_get_sensitive(official)) unexpected = 1;
+        else gtk_button_clicked(GTK_BUTTON(install));
+    }
+    if (mode == 19 && ticks == 15) {
+        GtkWidget *update = find(main, NULL, "Обновить игру");
+        if (!find(main, NULL, "Играть") || !update || !gtk_widget_get_sensitive(update)) unexpected = 1;
+        else gtk_button_clicked(GTK_BUTTON(update));
+    }
+    if (mode == 19 && ticks == 21) {
+        GtkWidget *official = find(main, NULL, "Открыть лаунчер Arizona");
+        if (!official || !gtk_widget_get_sensitive(official)) unexpected = 1;
+        else gtk_button_clicked(GTK_BUTTON(official));
+    }
+    if (mode == 20 && ticks == 4) {
+        GtkWidget *play = find(main, "alol-play", NULL);
+        if (!play || !gtk_widget_get_sensitive(play) ||
+            strcmp(gtk_button_get_label(GTK_BUTTON(play)), "Играть")) unexpected = 1;
+        else gtk_button_clicked(GTK_BUTTON(play));
+    }
     if (mode == 10 && ticks == 4) {
         gtk_notebook_set_current_page(GTK_NOTEBOOK(find(main, "alol-notebook", NULL)), 1);
         gtk_button_clicked(GTK_BUTTON(find(main, NULL, "Создать и выбрать ALOL-Proton")));
@@ -319,7 +372,15 @@ static gboolean inspect(gpointer unused) {
         clicked = 1;
         gtk_dialog_response(GTK_DIALOG(dialog), GTK_RESPONSE_ACCEPT);
     }
-    if (ticks < 12 || (mode == 15 && ticks < 16) || (mode == 17 && ticks < 22) || ((mode == 1 || mode == 2) && ticks < 16)) return G_SOURCE_CONTINUE;
+    if (ticks < 12 || (mode == 15 && ticks < 16) || (mode == 17 && ticks < 22) || (mode == 19 && ticks < 28) || ((mode == 1 || mode == 2) && ticks < 16)) return G_SOURCE_CONTINUE;
+    if (mode == 20) {
+        GtkWidget *hint = find(main, "alol-game-update-hint", NULL);
+        if (!hint || !on_screen(hint, main) ||
+            strcmp(gtk_label_get_text(GTK_LABEL(hint)), "Доступно обновление игры")) {
+            if (ticks < 45) return G_SOURCE_CONTINUE;
+            unexpected = 1;
+        }
+    }
     int width = 0, height = 0;
     gtk_window_get_default_size(GTK_WINDOW(main), &width, &height);
     GdkPixbuf *icon = gtk_window_get_icon(GTK_WINDOW(main));
@@ -332,7 +393,7 @@ static gboolean inspect(gpointer unused) {
             !strcmp(g_get_prgname(), getenv("ALOL_GUI_APP_ID")), find(main, NULL, "Установить лаунчер") != NULL,
             width, height, dialog && find(dialog, NULL, "Проверить снова") != NULL,
             on_screen(find(main, NULL, "Сохранить настройки"), main),
-            on_screen(find(main, NULL, "Установить Arizona"), main),
+            on_screen(find(main, NULL, "Установить игру"), main),
             gtk_expander_get_expanded(GTK_EXPANDER(find(main, "alol-help", NULL))),
             gtk_notebook_get_current_page(GTK_NOTEBOOK(find(main, "alol-notebook", NULL))),
             strstr(gtk_label_get_text(GTK_LABEL(find(main, "alol-mod-preview", NULL))), "Распознано файлов: 3") != NULL);
@@ -454,9 +515,55 @@ class App(unittest.TestCase):
                 opener.chmod(0o755)
             curl = tools / "curl"
             curl.write_text("#!/usr/bin/python3\nimport os,pathlib,shutil,sys\na=sys.argv\n"
+                            "if a[-1].endswith('/game.json'): sys.exit(22)\n"
                             "pathlib.Path(os.environ['ALOL_GUI_REQUEST']).touch()\n"
                             "shutil.copyfile(os.environ['ALOL_GUI_RELEASE'],a[a.index('--output')+1])\n")
             curl.chmod(0o755)
+            if mode in (19, 20):
+                prefix = root/'data/prefixes/wine'
+                launcher = prefix/'drive_c/Arizona Games Launcher'
+                launcher.mkdir(parents=True)
+                (launcher/'Arizona Games Launcher.exe').touch()
+                (prefix/'system.reg').touch()
+                (prefix/'winetricks.log').write_text('corefonts\nvcrun2022\n')
+                with config.open('a') as stream:
+                    stream.write(f'runner=wine\nprefix_root={root}/data/prefixes\n')
+                wine = tools/'wine'
+                wine.write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$ALOL_GUI_WINE_TRACE"\n')
+                wine.chmod(0o755)
+                payload = b'installed by ALOL'
+                manifest = root/'game.json'
+                manifest.write_text(json.dumps({'data':[{
+                    'type':'file','name':'gta_sa.exe','size':len(payload),
+                    'hash':hashlib.md5(payload).hexdigest()
+                }]}))
+                if mode == 20:
+                    game = launcher/'bin/arizona'
+                    game.mkdir(parents=True)
+                    previous_game = b'!' * len(payload)
+                    (game/'gta_sa.exe').write_bytes(previous_game)
+                    (game/'.alol-game-release').write_text(
+                        f'gta_sa.exe\t{len(previous_game)}\t{hashlib.md5(previous_game).hexdigest()}')
+                    (config.parent/'player.json').write_text(json.dumps({
+                        'server_id':'1','nickname':'Arizona_Player','nicknames':{'1':'Arizona_Player'}
+                    }))
+                curl.write_text("""#!/usr/bin/python3
+import os, pathlib, sys, time
+args = sys.argv[1:]
+with open(os.environ['ALOL_GUI_REQUEST'], 'a') as stream:
+    print(args[-1], file=stream)
+out = pathlib.Path(args[args.index('--output') + 1])
+if args[-1].endswith('/game.json'):
+    if os.environ['ALOL_GUI_MODE'] == '20':
+        with open(os.environ['ALOL_GUI_WINE_TRACE'], 'a') as stream:
+            print('manifest started', file=stream)
+        time.sleep(2)
+        with open(os.environ['ALOL_GUI_WINE_TRACE'], 'a') as stream:
+            print('manifest completed', file=stream)
+    out.write_bytes(pathlib.Path(os.environ['ALOL_GUI_GAME_MANIFEST']).read_bytes())
+else:
+    out.write_bytes(b'installed by ALOL')
+""")
             if cached:
                 cache = root / "data/alol/updates/release.json"
                 cache.parent.mkdir(parents=True)
@@ -469,6 +576,9 @@ class App(unittest.TestCase):
                        PATH=str(tools) + os.pathsep + os.environ["PATH"], ALOL_GUI_MODE=str(mode),
                        ALOL_GUI_REPORT=str(report), ALOL_GUI_RELEASE=str(metadata), ALOL_GUI_REQUEST=str(root / "requested"))
             if mode == 18: env['ALOL_GUI_LINK_TRACE']=str(root/'links.txt')
+            if mode in (19, 20):
+                env['ALOL_GUI_WINE_TRACE'] = str(root/'wine-trace')
+                env['ALOL_GUI_GAME_MANIFEST'] = str(manifest)
             if mode == 17:
                 env['ALOL_GUI_INSTALLED_FILE']=str(game/'config/gui-mod.ini')
                 prepared=subprocess.run([str(ROOT/'target/release/alol'),'mods-add',str(root/'mod.zip'),'root'],env=env,capture_output=True,text=True,timeout=8)
@@ -495,11 +605,30 @@ class App(unittest.TestCase):
             self.assertLessEqual(data["width"], 980)
             self.assertLessEqual(data["height"], 780)
             self.assertEqual(data["unexpected"], 0, result.stderr)
-            if mode not in (3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
+            if mode not in (3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20):
                 self.assertEqual(data["popup"], 1, data)
                 self.assertEqual(data["notes"], 1)
                 self.assertEqual(data["transient"], 1)
             self.assertEqual((root / "requested").exists(), not cached and mode not in (3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18))
+            if mode == 19:
+                self.assertEqual((launcher/'bin/arizona/gta_sa.exe').read_bytes(), payload)
+                urls = (root/'requested').read_text().splitlines()
+                cdn = 'https://pc.az-ins.com/release'
+                self.assertEqual(urls, [cdn+'/game.json', cdn+'/game/gta_sa.exe', cdn+'/game.json'])
+                trace = (root/'wine-trace').read_text().splitlines()
+                official = [line for line in trace if line.endswith('Arizona Games Launcher.exe')]
+                self.assertEqual(len(official), 1)
+                self.assertEqual(trace[-1], official[0])
+            if mode == 20:
+                game_exe = game/'gta_sa.exe'
+                self.assertEqual(game_exe.read_bytes(), previous_game)
+                self.assertEqual((root/'requested').read_text().splitlines(),
+                                 ['https://pc.az-ins.com/release/game.json'])
+                log = root/'data/alol/logs/alol.log'
+                trace = (root/'wine-trace').read_text().splitlines()
+                self.assertEqual([line for line in trace if line.startswith('manifest ') or line == str(game_exe)],
+                                 ['manifest started', str(game_exe), 'manifest completed'],
+                                 log.read_text() if log.exists() else result.stderr)
             if mode == 10:
                 saved=config.read_text()
                 if real_runtime:
@@ -521,6 +650,9 @@ class App(unittest.TestCase):
                 self.assertEqual(set(links),{'https://github.com/Velmi1337','https://velmi1337.github.io/','https://t.me/alolinux'})
             if mode == 13:
                 self.assertIn('ui_theme=light\n',config.read_text())
+                self.assertIn('ui_accent=rose\n',config.read_text())
+                self.assertIn('ui_text_scale=120\n',config.read_text())
+                self.assertIn('ui_bottom_navigation=true\n',config.read_text())
                 self.assertIn('fps_hud=true\n',config.read_text())
                 self.assertIn('wine=wine\n',config.read_text())
                 self.assertNotIn('unsaved-wine-command',config.read_text())
@@ -616,6 +748,12 @@ class App(unittest.TestCase):
 
     def test_about_window_opens_author_site_and_project_channel_links(self):
         self.scenario(18,policy='manual')
+
+    def test_direct_install_update_and_separate_official_launcher_button(self):
+        self.scenario(19, policy='manual')
+
+    def test_background_game_check_does_not_hold_up_play(self):
+        self.scenario(20, policy='manual')
 
     def test_zip_preview_shows_plan_without_installing(self):
         self.scenario(9, policy="manual")

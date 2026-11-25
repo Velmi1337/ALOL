@@ -1,8 +1,9 @@
 //! Small GTK 3 ABI surface. Widgets and signal data live on GTK's main thread.
 //! Native widgets, no webview, Cargo dependencies, or bundled toolkit.
-use crate::core::{self, Result, Settings};
+use crate::core::{self, Result, Settings, UI_ACCENTS, UI_TEXT_SCALES};
 use crate::desktop;
 use crate::game::{self, PlayerProfile, Server};
+use crate::game_download;
 use crate::game_options::{self, GameOptions};
 use crate::logs;
 use crate::mods::{self, CatalogMod, InstalledMod};
@@ -14,6 +15,7 @@ use std::{
     process::{Child, Command, Stdio},
     ptr,
     sync::mpsc::{self, Receiver},
+    time::{Duration, Instant},
 };
 
 type W = *mut c_void;
@@ -272,6 +274,23 @@ fn settings_group(parent: W, title: &str, description: &str) -> W {
     pack(parent, group, false);
     body
 }
+fn appearance_choice(parent: W, title: &str, name: &str, choices: &[&str], active: usize) -> W {
+    unsafe {
+        let row = box_new(false, 16);
+        style(row, "preference-row");
+        pack(row, label(title, "preference-title"), true);
+        let combo = gtk_combo_box_text_new();
+        gtk_widget_set_name(combo, c(name).as_ptr());
+        atk_object_set_name(gtk_widget_get_accessible(combo), c(title).as_ptr());
+        for choice in choices {
+            gtk_combo_box_text_append_text(combo, c(choice).as_ptr());
+        }
+        gtk_combo_box_set_active(combo, active as c_int);
+        pack(row, combo, false);
+        pack(parent, row, false);
+        combo
+    }
+}
 fn mod_row(name: &str, version: &str, description: &str, state: Option<&str>) -> W {
     let row = box_new(true, 6);
     style(row, "mod-row");
@@ -382,6 +401,7 @@ enum Action {
     Project(crate::project::Project),
     Work(&'static str),
     Play,
+    OfficialLauncher,
     Save,
     Folder,
     Stop,
@@ -415,6 +435,9 @@ struct Signal {
 }
 struct Fields {
     ui_theme: W,
+    ui_accent: W,
+    ui_text_scale: W,
+    ui_bottom_navigation: W,
     runner: W,
     proton: W,
     wine: W,
@@ -446,6 +469,8 @@ struct App {
     runtime: W,
     hero_title: W,
     hero: W,
+    hero_art: W,
+    hero_mark: W,
     hero_step: W,
     help_expander: W,
     settings_hint: W,
@@ -453,6 +478,10 @@ struct App {
     detail: W,
     play: W,
     update_game: W,
+    game_update_hint: W,
+    game_check: Option<GameCheck>,
+    official_launcher: W,
+    progress_reader: core::LogTail,
     game_folder: W,
     spinner: W,
     stop: W,
@@ -506,6 +535,18 @@ struct App {
     update_dialog_status: W,
     update_prompt_pending: bool,
     update_manual: bool,
+}
+struct GameCheck {
+    key: GameCheckKey,
+    requested: Instant,
+    receiver: Option<Receiver<Result<Option<bool>>>>,
+}
+#[derive(PartialEq)]
+struct GameCheckKey {
+    project: crate::project::Project,
+    prefix: std::path::PathBuf,
+    executable: String,
+    new_graphics: bool,
 }
 struct Capture {
     output: std::path::PathBuf,
@@ -603,6 +644,7 @@ struct Chrome {
     subtitle: W,
     buttons: Vec<W>,
     compact: Cell<bool>,
+    bottom_navigation: Cell<bool>,
 }
 impl Chrome {
     fn select(&self, page: usize) {
@@ -620,7 +662,7 @@ impl Chrome {
         }
     }
     fn resize(&self, width: i32) {
-        let compact = width < 840;
+        let compact = self.bottom_navigation.get() || width < 840;
         if self.compact.replace(compact) == compact {
             return;
         }
@@ -732,13 +774,18 @@ impl App {
             gtk_widget_show_all(dialog);
         }
     }
-    fn apply_appearance(&self) {
+    fn apply_appearance(&mut self) {
         let light = self.settings.ui_theme == "light";
         let ink = if light { "#444746" } else { "#c4c7c5" };
         unsafe {
             gtk_css_provider_load_from_data(
                 self.theme_provider,
-                c(&theme_css(light)).as_ptr(),
+                c(&theme_css(
+                    light,
+                    &self.settings.ui_accent,
+                    self.settings.ui_text_scale,
+                ))
+                .as_ptr(),
                 -1,
                 ptr::null_mut(),
             );
@@ -770,6 +817,26 @@ impl App {
                     ),
                 );
             }
+            if !self.hero_mark.is_null() {
+                gtk_widget_destroy(self.hero_mark);
+            }
+            self.hero_mark = expressive_mark(light, &self.settings.ui_accent);
+            pack(self.hero_art, self.hero_mark, false);
+            gtk_widget_show_all(self.hero_mark);
+            self.chrome
+                .bottom_navigation
+                .set(self.settings.ui_bottom_navigation);
+            gtk_box_reorder_child(
+                self.chrome.shell,
+                self.chrome.rail,
+                if self.settings.ui_bottom_navigation {
+                    -1
+                } else {
+                    0
+                },
+            );
+            self.chrome
+                .resize(gtk_widget_get_allocated_width(self.window));
         }
     }
     fn load_project_controls(&mut self) -> Result<()> {
@@ -861,6 +928,7 @@ impl App {
         );
         self.reload_mods();
         self.refresh();
+        self.check_game_updates();
         set_label(
             self.settings_hint,
             &format!(
@@ -916,6 +984,7 @@ impl App {
                 Action::Work(_)
                     | Action::Project(_)
                     | Action::Play
+                    | Action::OfficialLauncher
                     | Action::Save
                     | Action::ChooseInstaller
                     | Action::Update
@@ -944,6 +1013,10 @@ impl App {
         let s = Settings {
             project: self.settings.project,
             ui_theme: self.settings.ui_theme.clone(),
+            ui_accent: self.settings.ui_accent.clone(),
+            ui_text_scale: self.settings.ui_text_scale,
+            ui_bottom_navigation: self.settings.ui_bottom_navigation,
+            defer_runtime_updates: false,
             runner: if unsafe { gtk_combo_box_get_active(f.runner) } == 1 {
                 "wine"
             } else {
@@ -1032,39 +1105,29 @@ impl App {
             fps_hud,
             game_mode
         );
+        self.check_game_updates();
         set_label(self.status, "Сохранено · применится при следующем запуске");
         Ok(())
     }
 
     fn refresh(&self) {
         let s = &self.settings;
-        let installed = s.find_executable();
         let game_ready = game::game_executable(s).is_ok();
+        let unfinished =
+            mods::game_path(s).is_ok_and(|path| crate::game_download::unfinished(&path));
         unsafe {
             gtk_widget_set_visible(self.hero, (!game_ready).into());
             gtk_widget_set_visible(self.player_controls, game_ready.into());
         }
         set_label(
             self.hero_title,
-            if game_ready {
-                "Время играть."
-            } else if installed.is_some() {
-                "Осталось скачать игру"
+            if unfinished {
+                "Продолжим загрузку"
             } else {
-                "Начнём с установки"
+                "Установить игру"
             },
         );
-        set_label(
-            self.hero_step,
-            if game_ready {
-                s.project.name()
-            } else if installed.is_some() {
-                "ШАГ 2 ИЗ 3 · ФАЙЛЫ ИГРЫ"
-            } else {
-                "ШАГ 1 ИЗ 3 · УСТАНОВКА"
-            },
-        );
-        let prepared = s.prefix_ready();
+        set_label(self.hero_step, s.project.name());
         let runtime_name = if s.runner == "wine" {
             s.wine.clone()
         } else {
@@ -1090,18 +1153,10 @@ impl App {
         );
         set_label(
             self.detail,
-            if game_ready {
-                if s.project == crate::project::Project::Rodina {
-                    "Выбери сервер. Твой персонаж ждёт внутри игры."
-                } else {
-                    "Твой сервер, твой персонаж. Всё готово к новой истории."
-                }
-            } else if installed.is_some() {
-                "Откроем официальный лаунчер на выбранной игре. После загрузки играйте прямо отсюда."
-            } else if prepared {
-                "Всё подготовлено. Выберите установщик Arizona — остальное сделаем за вас."
+            if unfinished {
+                "ALOL проверит уже скачанные файлы и загрузит оставшиеся."
             } else {
-                "Выберите установщик Arizona Games. ALOL подготовит окружение для обеих игр."
+                "ALOL скачает файлы с серверов Arizona и подготовит игру к запуску."
             },
         );
         unsafe {
@@ -1109,14 +1164,19 @@ impl App {
                 self.play,
                 c(if game_ready {
                     "Играть"
-                } else if installed.is_some() {
-                    "Скачать игру"
+                } else if unfinished {
+                    "Продолжить загрузку"
                 } else {
-                    if s.project == crate::project::Project::Arizona {
-                        "Установить Arizona"
-                    } else {
-                        "Установить лаунчер"
-                    }
+                    "Установить игру"
+                })
+                .as_ptr(),
+            );
+            gtk_button_set_label(
+                self.official_launcher,
+                c(if s.find_executable().is_some() {
+                    "Открыть лаунчер Arizona"
+                } else {
+                    "Установить лаунчер Arizona"
                 })
                 .as_ptr(),
             );
@@ -1125,13 +1185,11 @@ impl App {
             set_label(
                 self.status,
                 if game_ready {
-                    "Готов к запуску"
-                } else if installed.is_some() {
-                    "Следующий шаг — скачать файлы игры"
-                } else if prepared {
-                    "Можно установить общий лаунчер"
+                    "Готово к запуску"
+                } else if unfinished {
+                    "Загрузка не завершена"
                 } else {
-                    "Требуется установка"
+                    "Игра ещё не установлена"
                 },
             );
         }
@@ -1143,11 +1201,11 @@ impl App {
         unsafe {
             gtk_widget_set_sensitive(
                 self.update_game,
-                (idle && self.settings.find_executable().is_some()).into(),
+                (idle && game::game_executable(&self.settings).is_ok()).into(),
             );
             gtk_widget_set_sensitive(
                 self.game_folder,
-                (idle && self.settings.prefix_ready()).into(),
+                (idle && mods::game_path(&self.settings).is_ok_and(|path| path.is_dir())).into(),
             );
         }
     }
@@ -1181,13 +1239,21 @@ impl App {
             e.to_string()
         })?);
         self.action = action.into();
+        self.progress_reader = core::LogTail::default();
+        if action == "game-update" {
+            self.game_check = None;
+            self.set_game_update_hint("");
+        } else if action == "play" {
+            self.check_game_updates();
+        }
         self.stop_at = None;
         set_label(
             self.status,
             match action {
                 "prepare" => "Подготовка окружения, шрифтов и Visual C++…",
-                "install" => "Установка Arizona и необходимых компонентов…",
-                "launch" => "Официальный лаунчер работает · закройте его для завершения",
+                "install" => "Установка официального лаунчера Arizona…",
+                "game-update" => "Готовим проверку файлов игры…",
+                "launch" => "Открываем официальный лаунчер Arizona…",
                 "play" => "Запуск игры на выбранном сервере…",
                 "servers-refresh" => "Обновление списка серверов выбранной игры…",
                 "repair" => "Восстановление окружения…",
@@ -1242,10 +1308,24 @@ impl App {
                 } else {
                     "dark"
                 };
+                let accent = UI_ACCENTS
+                    .get(unsafe { gtk_combo_box_get_active(self.fields.ui_accent) } as usize)
+                    .map_or("blue", |(id, _)| *id);
+                let text_scale = UI_TEXT_SCALES
+                    .get(unsafe { gtk_combo_box_get_active(self.fields.ui_text_scale) } as usize)
+                    .copied()
+                    .unwrap_or(100);
+                let bottom_navigation = checked(self.fields.ui_bottom_navigation);
                 let mut saved = Settings::load()?;
                 saved.ui_theme = theme.into();
+                saved.ui_accent = accent.into();
+                saved.ui_text_scale = text_scale;
+                saved.ui_bottom_navigation = bottom_navigation;
                 saved.save()?;
-                self.settings.ui_theme = theme.into();
+                self.settings.ui_theme = saved.ui_theme;
+                self.settings.ui_accent = saved.ui_accent;
+                self.settings.ui_text_scale = saved.ui_text_scale;
+                self.settings.ui_bottom_navigation = saved.ui_bottom_navigation;
                 self.apply_appearance();
             }
             Action::Navigate(page) => {
@@ -1423,24 +1503,22 @@ impl App {
                 let operation = if game::game_executable(&s).is_ok() {
                     self.player.validate_launch()?;
                     "play"
-                } else if s.find_executable().is_some() {
-                    "launch"
                 } else {
-                    "install"
+                    "game-update"
                 };
                 self.start(operation)?;
             }
+            Action::OfficialLauncher => {
+                let installed = self.collect()?.find_executable().is_some();
+                self.start(if installed { "launch" } else { "install" })?;
+            }
             Action::Save => {
                 self.save()?;
+                self.check_game_updates();
                 set_label(self.status, "Настройки сохранены");
             }
             Action::Folder => {
-                let path = self
-                    .settings
-                    .find_executable()
-                    .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
-                    .unwrap_or_else(|| self.settings.prefix());
-                std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+                let path = mods::game_dir(&self.settings)?;
                 crate::portable::command("xdg-open")
                     .arg(path)
                     .spawn()
@@ -1985,10 +2063,21 @@ impl App {
 
     fn tick(&mut self) {
         self.poll_updates();
+        self.poll_game_updates();
         if let Err(e) = self.persist_player(false) {
             set_label(self.status, &format!("Не сохранить ник и сервер: {e}"));
         }
         if let Some(child) = &mut self.child {
+            if self.stop_at.is_none()
+                && let Some(log) = self.progress_reader.changed()
+                && let Some(stage) = logs::operation_progress(
+                    &log,
+                    self.settings.runner == "proton"
+                        && matches!(self.action.as_str(), "play" | "launch"),
+                )
+            {
+                set_label(self.status, &stage);
+            }
             if self
                 .stop_at
                 .is_some_and(|t| unsafe { g_get_monotonic_time() } - t > 3_000_000)
@@ -2001,6 +2090,20 @@ impl App {
                 Ok(Some(status)) => {
                     let stopped = self.stop_at.take().is_some();
                     self.child = None;
+                    let game_action = matches!(
+                        self.action.as_str(),
+                        "game-update" | "play" | "launch" | "install"
+                    );
+                    let mut error = None;
+                    if game_action && !status.success() && !stopped {
+                        let log = core::tail_log();
+                        error = log
+                            .lines()
+                            .rev()
+                            .take_while(|line| !line.starts_with("──────── ALOL ·"))
+                            .find_map(|line| line.strip_prefix("Ошибка: "))
+                            .map(|text| text.chars().take(155).collect::<String>());
+                    }
                     logs::finish(&self.action, status.success(), stopped);
                     if self.action == "mods-preview" {
                         set_label(
@@ -2049,6 +2152,9 @@ impl App {
                         self.settings = s;
                     }
                     self.refresh();
+                    if self.action == "game-update" && status.success() {
+                        self.set_game_update_hint("Файлы игры проверены");
+                    }
                     self.reload_mods();
                     if self.action == "servers-refresh"
                         && let Err(e) = self.reload_server_choices()
@@ -2062,11 +2168,15 @@ impl App {
                         } else if status.success() {
                             if self.action == "play" {
                                 "Игра закрыта · можно подключиться снова"
+                            } else if self.action == "game-update" {
+                                "Файлы проверены · можно играть"
                             } else {
                                 "Готово · подробности в журнале"
                             }
                         } else {
-                            "Операция не выполнена · откройте журнал"
+                            error
+                                .as_deref()
+                                .unwrap_or("Операция не выполнена · откройте журнал")
                         },
                     );
                     unsafe {
@@ -2088,7 +2198,7 @@ impl App {
                         gtk_widget_set_sensitive(self.stop, 0);
                         gtk_widget_set_visible(self.stop, 0);
                         gtk_spinner_stop(self.spinner);
-                        if !status.success() && !stopped {
+                        if !status.success() && !stopped && error.is_none() {
                             gtk_notebook_set_current_page(self.notebook, 3);
                         }
                     }
@@ -2104,6 +2214,86 @@ impl App {
             self.update_prompt_pending = false;
             self.show_update_dialog();
         }
+    }
+
+    fn game_check_key(&self) -> GameCheckKey {
+        GameCheckKey {
+            project: self.settings.project,
+            prefix: self.settings.prefix(),
+            executable: self.settings.executable.clone(),
+            new_graphics: self
+                .game_checks
+                .iter()
+                .any(|(id, widget)| *id == "newGraphics" && checked(*widget)),
+        }
+    }
+
+    fn set_game_update_hint(&self, message: &str) {
+        set_label(self.game_update_hint, message);
+        unsafe {
+            gtk_widget_set_visible(self.game_update_hint, (!message.is_empty()).into());
+        }
+    }
+
+    fn check_game_updates(&mut self) {
+        if self.capture.is_some()
+            || (self.child.is_some() && self.action == "game-update")
+            || std::env::args().any(|arg| arg == "--smoke-test")
+        {
+            return;
+        }
+        let key = self.game_check_key();
+        if self.game_check.as_ref().is_some_and(|check| {
+            check.key == key
+                && (check.receiver.is_some()
+                    || check.requested.elapsed() < Duration::from_secs(300))
+        }) {
+            return;
+        }
+        self.set_game_update_hint("");
+        let (sender, receiver) = mpsc::channel();
+        let settings = self.settings.clone();
+        let new_graphics = key.new_graphics;
+        self.game_check = Some(GameCheck {
+            key,
+            requested: Instant::now(),
+            receiver: Some(receiver),
+        });
+        std::thread::spawn(move || {
+            let result = match game::game_executable(&settings) {
+                Ok(executable) => game_download::update_available(
+                    &settings,
+                    executable.parent().unwrap(),
+                    new_graphics,
+                )
+                .map(Some),
+                Err(_) => Ok(None),
+            };
+            let _ = sender.send(result);
+        });
+    }
+
+    fn poll_game_updates(&mut self) {
+        let key = self.game_check_key();
+        let Some(check) = &mut self.game_check else {
+            return;
+        };
+        if check.key != key {
+            self.game_check = None;
+            self.set_game_update_hint("");
+            return;
+        }
+        let label = match check.receiver.as_ref().map(Receiver::try_recv) {
+            Some(Ok(Ok(Some(true)))) => "Доступно обновление игры",
+            Some(Ok(Ok(Some(false)))) => "Обновлений игры нет",
+            Some(Ok(Ok(None))) => "",
+            Some(Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected)) => {
+                "Не удалось проверить обновления игры"
+            }
+            _ => return,
+        };
+        check.receiver = None;
+        self.set_game_update_hint(label);
     }
 
     fn check_updates(&mut self, force: bool) {
@@ -2512,9 +2702,18 @@ fn symbol(name: &str, color: &str, size: i32) -> W {
         size,
     )
 }
-fn expressive_mark() -> W {
+fn expressive_mark(light: bool, accent: &str) -> W {
+    let (primary, ink) = accent_colors(accent, light)
+        .map(|colors| (colors[0], colors[1]))
+        .unwrap_or(if light {
+            ("#0b57d0", "#ffffff")
+        } else {
+            ("#a8c7fa", "#062e6f")
+        });
     vector_image(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="112" height="112" viewBox="0 0 112 112"><g fill="#8ab4f8"><circle cx="56" cy="28" r="24"/><circle cx="80" cy="42" r="24"/><circle cx="80" cy="70" r="24"/><circle cx="56" cy="84" r="24"/><circle cx="32" cy="70" r="24"/><circle cx="32" cy="42" r="24"/></g><circle cx="56" cy="56" r="32" fill="#a8c7fa"/><path d="M48 38Q46 37 46 40V73Q46 76 49 74L73 59Q77 56 73 53Z" fill="#062e6f"/></svg>"##,
+        &format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="112" height="112" viewBox="0 0 112 112"><g fill="{primary}" opacity="0.65"><circle cx="56" cy="28" r="24"/><circle cx="80" cy="42" r="24"/><circle cx="80" cy="70" r="24"/><circle cx="56" cy="84" r="24"/><circle cx="32" cy="70" r="24"/><circle cx="32" cy="42" r="24"/></g><circle cx="56" cy="56" r="32" fill="{primary}"/><path d="M48 38Q46 37 46 40V73Q46 76 49 74L73 59Q77 56 73 53Z" fill="{ink}"/></svg>"#
+        ),
         88,
     )
 }
@@ -2819,14 +3018,88 @@ const LIGHT_COLORS: &str = r#"
 pub fn run() -> Result<()> {
     run_mode(None)
 }
-fn theme_css(light: bool) -> String {
-    if !light {
-        return CSS.into();
-    }
-    let (_, shared) = CSS
+fn accent_colors(accent: &str, light: bool) -> Option<[&'static str; 8]> {
+    Some(match (accent, light) {
+        ("violet", true) => [
+            "#6942a6", "#ffffff", "#eadcff", "#331460", "#7953b6", "#53318d", "#efe4fd", "#dfccf7",
+        ],
+        ("violet", false) => [
+            "#d6bbff", "#311658", "#49316d", "#efdcff", "#e2ccff", "#c4a8f0", "#312640", "#583d7d",
+        ],
+        ("mint", true) => [
+            "#006b56", "#ffffff", "#a9f2da", "#002019", "#087c65", "#005141", "#dcf1e9", "#91deca",
+        ],
+        ("mint", false) => [
+            "#86d7bf", "#00382d", "#005142", "#a9f2da", "#a5e8d4", "#73c3aa", "#223b36", "#166455",
+        ],
+        ("amber", true) => [
+            "#7b5700", "#ffffff", "#ffdf9f", "#271900", "#896512", "#664700", "#f9edd6", "#edd092",
+        ],
+        ("amber", false) => [
+            "#f4d18b", "#402d06", "#553e15", "#ffdda0", "#ffe2a9", "#dfbd75", "#382e1f", "#654818",
+        ],
+        ("rose", true) => [
+            "#963954", "#ffffff", "#ffd9e4", "#3d0720", "#a54a65", "#7b2942", "#f9e6ec", "#f2c3d2",
+        ],
+        ("rose", false) => [
+            "#ffb2c8", "#510f2d", "#6d2944", "#ffdae4", "#ffc7d7", "#ef9eb5", "#382530", "#80364f",
+        ],
+        ("graphite", true) => [
+            "#4a5767", "#ffffff", "#dce5f2", "#15212e", "#586577", "#384555", "#e7ebf1", "#cad7e8",
+        ],
+        ("graphite", false) => [
+            "#d2dbe7", "#28313c", "#414b57", "#e7eef8", "#e1e9f3", "#bdc8d5", "#272e36", "#4d5866",
+        ],
+        _ => return None,
+    })
+}
+
+fn theme_css(light: bool, accent: &str, text_scale: u16) -> String {
+    let (dark, shared) = CSS
         .split_once("@define-color theme_bg_color")
         .expect("semantic GTK theme");
-    format!("{LIGHT_COLORS}\n@define-color theme_bg_color{shared}")
+    let base = if light { LIGHT_COLORS } else { dark };
+    let mut palette = String::from(base);
+    if let Some(colors) = accent_colors(accent, light) {
+        for (name, value) in [
+            "md_primary",
+            "md_on_primary",
+            "md_primary_container",
+            "md_on_primary_container",
+            "md_primary_hover",
+            "md_primary_pressed",
+            "md_hero",
+            "md_selected_hover",
+            "md_secondary_container",
+            "md_on_secondary_container",
+        ]
+        .into_iter()
+        .zip(colors.into_iter().chain([colors[2], colors[3]]))
+        {
+            palette.push_str(&format!("\n@define-color {name} {value};"));
+        }
+    }
+    palette.push_str("\n@define-color theme_bg_color");
+    if text_scale == 100 {
+        palette.push_str(shared);
+        return palette;
+    }
+    // Scale the existing absolute sizes without changing GTK's system font
+    // metrics or compounding sizes on nested widgets.
+    let mut rules = shared.split("font-size: ");
+    palette.push_str(rules.next().unwrap_or_default());
+    for rule in rules {
+        palette.push_str("font-size: ");
+        if let Some((size, rest)) = rule.split_once("px")
+            && let Ok(pixels) = size.parse::<u32>()
+        {
+            let scaled = (pixels * u32::from(text_scale) + 50) / 100;
+            palette.push_str(&format!("{scaled}px{rest}"));
+        } else {
+            palette.push_str(rule);
+        }
+    }
+    palette
 }
 fn register_interface_font() -> Result<()> {
     let bytes = crate::fonts::GOOGLE_SANS;
@@ -2864,7 +3137,12 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         let provider = gtk_css_provider_new();
         gtk_css_provider_load_from_data(
             provider,
-            c(&theme_css(settings.ui_theme == "light")).as_ptr(),
+            c(&theme_css(
+                settings.ui_theme == "light",
+                &settings.ui_accent,
+                settings.ui_text_scale,
+            ))
+            .as_ptr(),
             -1,
             ptr::null_mut(),
         );
@@ -2896,6 +3174,8 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         gtk_widget_set_name(shell, c"alol-shell".as_ptr());
         gtk_container_add(window, shell);
         let rail = box_new(true, 24);
+        gtk_widget_set_name(rail, c"alol-navigation".as_ptr());
+        gtk_widget_set_size_request(rail, 96, -1);
         style(rail, "navigation-rail");
         let rail_brand = box_new(true, 8);
         pack(rail_brand, logo(48), false);
@@ -2946,7 +3226,8 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         pack(hero_copy, detail, false);
         let runtime = label("", "runtime");
         pack(hero, hero_copy, true);
-        pack(hero, expressive_mark(), false);
+        let hero_art = box_new(false, 0);
+        pack(hero, hero_art, false);
         pack(home, hero, false);
         let settings_page = box_new(true, 14);
         gtk_container_set_border_width(settings_page, 4);
@@ -2997,7 +3278,9 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         let status = label("", "body");
         let spinner = gtk_spinner_new();
         let footer = box_new(false, 10);
-        gtk_widget_set_size_request(status, 160, -1);
+        gtk_widget_set_size_request(status, 130, -1);
+        gtk_label_set_line_wrap(status, 1);
+        gtk_label_set_max_width_chars(status, 52);
         pack(footer, spinner, false);
         pack(footer, status, true);
         gtk_label_set_max_width_chars(runtime, 26);
@@ -3005,6 +3288,9 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         pack(footer, runtime, false);
         let empty = Fields {
             ui_theme: ptr::null_mut(),
+            ui_accent: ptr::null_mut(),
+            ui_text_scale: ptr::null_mut(),
+            ui_bottom_navigation: ptr::null_mut(),
             runner: ptr::null_mut(),
             proton: ptr::null_mut(),
             wine: ptr::null_mut(),
@@ -3036,7 +3322,8 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
                 title: page_title,
                 subtitle: page_subtitle,
                 buttons: Vec::new(),
-                compact: Cell::new(width >= 840),
+                compact: Cell::new(false),
+                bottom_navigation: Cell::new(settings.ui_bottom_navigation),
             }),
             settings: settings.clone(),
             project_buttons: Vec::new(),
@@ -3047,6 +3334,8 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             runtime,
             hero_title,
             hero,
+            hero_art,
+            hero_mark: ptr::null_mut(),
             hero_step,
             help_expander: ptr::null_mut(),
             settings_save_bar: ptr::null_mut(),
@@ -3057,6 +3346,10 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             detail,
             play: ptr::null_mut(),
             update_game: ptr::null_mut(),
+            game_update_hint: ptr::null_mut(),
+            game_check: None,
+            official_launcher: ptr::null_mut(),
+            progress_reader: core::LogTail::default(),
             game_folder: ptr::null_mut(),
             spinner,
             stop: ptr::null_mut(),
@@ -3234,7 +3527,8 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         }
         pack(outer, project_row, false);
         gtk_box_reorder_child(outer, project_row, 1);
-        app.play = app.button(play_actions, "Установить Arizona", Action::Play, true);
+        app.play = app.button(play_actions, "Установить игру", Action::Play, true);
+        gtk_widget_set_name(app.play, c"alol-play".as_ptr());
         style(app.play, "play-button");
         let secondary = if width < 640 {
             let row = box_new(true, 8);
@@ -3243,10 +3537,26 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         } else {
             action_row()
         };
-        app.update_game = app.button(secondary, "Обновить игру", Action::Work("launch"), false);
+        app.update_game = app.button(
+            secondary,
+            "Обновить игру",
+            Action::Work("game-update"),
+            false,
+        );
         app.game_folder = app.button(secondary, "Папка игры", Action::Folder, false);
         app.button(secondary, "Помощь", Action::Help, false);
         pack(play_actions, secondary, false);
+        app.game_update_hint = label("", "caption");
+        gtk_widget_set_name(app.game_update_hint, c"alol-game-update-hint".as_ptr());
+        gtk_widget_set_no_show_all(app.game_update_hint, 1);
+        pack(play_actions, app.game_update_hint, false);
+        app.official_launcher = app.button(
+            play_actions,
+            "Открыть лаунчер Arizona",
+            Action::OfficialLauncher,
+            false,
+        );
+
         let maintenance = box_new(true, 10);
         let expander = gtk_expander_new(c"Установка и восстановление".as_ptr());
         app.help_expander = expander;
@@ -3266,7 +3576,7 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         pack(
             maintenance,
             label(
-                "Скачайте .exe с сайта Arizona и выберите файл.\nProton, шрифты и Visual C++ устанавливаются автоматически.",
+                "Для установки самой игры достаточно кнопки на главном экране.\nФайл .exe нужен, если вы хотите пользоваться официальным лаунчером.",
                 "caption",
             ),
             false,
@@ -3314,7 +3624,7 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         pack(
             maintenance,
             label(
-                "Починка сохраняет копии кэша. Сброс графики сохраняет копию настроек выбранной игры.\nПроверка и восстановление файлов игры доступны в официальном лаунчере.",
+                "Починка сохраняет копии кэша. Сброс графики сохраняет копию настроек выбранной игры.\nКнопка «Обновить игру» проверяет и при необходимости скачивает игровые файлы.",
                 "caption",
             ),
             false,
@@ -3348,17 +3658,42 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         let mods_page = app.build_mods();
         notebook_page(notebook, mods_page, "Моды", tab_sizes);
         notebook_page(notebook, log_page, "Журнал", tab_sizes);
-        let appearance = settings_group(
-            settings_launcher,
-            "Оформление",
-            "Тема применяется сразу и запоминается.",
+        let appearance = settings_group(settings_launcher, "Оформление", "");
+        let ui_theme = appearance_choice(
+            appearance,
+            "Тема",
+            "alol-ui-theme",
+            &["Тёмная", "Светлая"],
+            usize::from(settings.ui_theme == "light"),
         );
-        let ui_theme = gtk_combo_box_text_new();
-        gtk_widget_set_name(ui_theme, c"alol-ui-theme".as_ptr());
-        gtk_combo_box_text_append_text(ui_theme, c"Тёмная тема".as_ptr());
-        gtk_combo_box_text_append_text(ui_theme, c"Светлая тема".as_ptr());
-        gtk_combo_box_set_active(ui_theme, if settings.ui_theme == "light" { 1 } else { 0 });
-        pack(appearance, ui_theme, false);
+        let accent_index = UI_ACCENTS
+            .iter()
+            .position(|(id, _)| *id == settings.ui_accent)
+            .unwrap_or(0);
+        let ui_accent = appearance_choice(
+            appearance,
+            "Акцентный цвет",
+            "alol-ui-accent",
+            &UI_ACCENTS.map(|(_, title)| title),
+            accent_index,
+        );
+        let scale_index = UI_TEXT_SCALES
+            .iter()
+            .position(|&scale| scale == settings.ui_text_scale)
+            .unwrap_or(0);
+        let ui_text_scale = appearance_choice(
+            appearance,
+            "Размер текста",
+            "alol-ui-text-scale",
+            &["100 %", "110 %", "120 %"],
+            scale_index,
+        );
+        let ui_bottom_navigation = check(
+            appearance,
+            "Навигация внизу окна",
+            settings.ui_bottom_navigation,
+        );
+        gtk_widget_set_name(ui_bottom_navigation, c"alol-ui-bottom-navigation".as_ptr());
         let performance = settings_group(
             settings_page,
             "Производительность",
@@ -3598,6 +3933,9 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         );
         app.fields = Fields {
             ui_theme,
+            ui_accent,
+            ui_text_scale,
+            ui_bottom_navigation,
             runner,
             proton,
             wine,
@@ -3617,6 +3955,9 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             update_notifications,
         };
         app.connect_action(ui_theme, "changed", Action::Appearance);
+        app.connect_action(ui_accent, "changed", Action::Appearance);
+        app.connect_action(ui_text_scale, "changed", Action::Appearance);
+        app.connect_action(ui_bottom_navigation, "notify::active", Action::Appearance);
         app.connect_action(update_policy, "changed", Action::UpdatePreferences);
         app.connect_action(
             update_notifications,
@@ -3680,7 +4021,7 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
             );
         }
         gtk_widget_add_accelerator(app.play, c"clicked".as_ptr(), accelerators, 0xff0d, 4, 1);
-        gtk_widget_set_tooltip_text(app.play, c"Запустить · Ctrl+Enter".as_ptr());
+        gtk_widget_set_tooltip_text(app.play, c"Основное действие · Ctrl+Enter".as_ptr());
         g_object_unref(accelerators);
         app.refresh();
         app.reload_mods();
@@ -3701,12 +4042,12 @@ pub(crate) fn run_mode(capture_output: Option<std::path::PathBuf>) -> Result<()>
         gtk_widget_show_all(window);
         app.load_project_controls()?;
         app.apply_appearance();
-        app.chrome.compact.set(width >= 840);
         app.chrome.resize(width);
         app.refresh();
         if app.capture.is_some() {
             set_label(app.status, "Демонстрационный профиль · Nick_Name");
         }
+        app.check_game_updates();
         // Allow GTK to map and allocate each page before drawing it.
         let capture_timer = if app.capture.is_some() {
             g_timeout_add(900, Some(capture_tick), (&mut *app as *mut App).cast())

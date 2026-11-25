@@ -21,6 +21,17 @@ extern "C" fn terminate(_: i32) {
     TERMINATED.store(true, Ordering::Relaxed);
 }
 
+pub(crate) fn check_cancelled() -> Result<()> {
+    if TERMINATED.load(Ordering::Relaxed) {
+        return Err("Операция остановлена".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn progress(message: &str) {
+    println!("ALOL-ЭТАП: {message}");
+}
+
 pub fn home() -> PathBuf {
     env::var_os("HOME")
         .map(PathBuf::from)
@@ -44,11 +55,25 @@ pub fn log_file() -> PathBuf {
     data_dir().join("logs/alol.log")
 }
 
+pub(crate) const UI_ACCENTS: [(&str, &str); 6] = [
+    ("blue", "Синий"),
+    ("violet", "Сиреневый"),
+    ("mint", "Мятный"),
+    ("amber", "Янтарный"),
+    ("rose", "Розовый"),
+    ("graphite", "Графитовый"),
+];
+pub(crate) const UI_TEXT_SCALES: [u16; 3] = [100, 110, 120];
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub project: crate::project::Project,
     pub ui_theme: String,
+    pub ui_accent: String,
+    pub ui_text_scale: u16,
+    pub ui_bottom_navigation: bool,
     pub runner: String,
+    pub(crate) defer_runtime_updates: bool,
     pub proton: String,
     pub wine: String,
     pub installer: String,
@@ -72,12 +97,16 @@ impl Default for Settings {
         Self {
             project: crate::project::Project::default(),
             ui_theme: "dark".into(),
+            ui_accent: "blue".into(),
+            ui_text_scale: 100,
+            ui_bottom_navigation: false,
             runner: if !available("umu-run") && available("wine") {
                 "wine"
             } else {
                 "proton"
             }
             .into(),
+            defer_runtime_updates: false,
             proton: "GE-Proton".into(),
             wine: "wine".into(),
             installer: String::new(),
@@ -119,6 +148,11 @@ impl Settings {
             match k {
                 "project" => self.project = crate::project::Project::parse(v)?,
                 "ui_theme" => self.ui_theme = v.into(),
+                "ui_accent" => self.ui_accent = v.into(),
+                "ui_text_scale" => {
+                    self.ui_text_scale = v.parse().map_err(|_| "Неверный размер текста")?;
+                }
+                "ui_bottom_navigation" => self.ui_bottom_navigation = v == "true",
                 "runner" => self.runner = v.into(),
                 "proton" => self.proton = v.into(),
                 "wine" => self.wine = v.into(),
@@ -146,6 +180,12 @@ impl Settings {
     pub fn validate(&self) -> Result<()> {
         if !["dark", "light"].contains(&self.ui_theme.as_str()) {
             return Err("Выберите светлую или тёмную тему".into());
+        }
+        if !UI_ACCENTS.iter().any(|(id, _)| *id == self.ui_accent) {
+            return Err("Неизвестный цвет оформления".into());
+        }
+        if !UI_TEXT_SCALES.contains(&self.ui_text_scale) {
+            return Err("Неизвестный размер текста".into());
         }
         if !["startup", "daily", "weekly", "manual"].contains(&self.update_policy.as_str()) {
             return Err("Неизвестный режим проверки обновлений".into());
@@ -204,9 +244,12 @@ impl Settings {
         let path = config_file();
         fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
         let text = format!(
-            "# ALOL — пути записываются без кавычек\nproject={}\nui_theme={}\nrunner={}\nproton={}\nwine={}\ninstaller={}\nexecutable={}\nprefix_root={}\nwined3d={}\ndisable_gpu={}\ndiscrete_gpu={}\ndebug={}\nno_sync={}\nlauncher_compatibility={}\ninput_compatibility={}\nfps_hud={}\ngame_mode={}\nupdate_policy={}\nupdate_notifications={}\n",
+            "# ALOL — пути записываются без кавычек\nproject={}\nui_theme={}\nui_accent={}\nui_text_scale={}\nui_bottom_navigation={}\nrunner={}\nproton={}\nwine={}\ninstaller={}\nexecutable={}\nprefix_root={}\nwined3d={}\ndisable_gpu={}\ndiscrete_gpu={}\ndebug={}\nno_sync={}\nlauncher_compatibility={}\ninput_compatibility={}\nfps_hud={}\ngame_mode={}\nupdate_policy={}\nupdate_notifications={}\n",
             self.project.id(),
             self.ui_theme,
+            self.ui_accent,
+            self.ui_text_scale,
+            self.ui_bottom_navigation,
             self.runner,
             self.proton,
             self.wine,
@@ -289,6 +332,16 @@ impl Settings {
             } else {
                 self.proton.clone()
             };
+            if self.defer_runtime_updates {
+                c.env("UMU_RUNTIME_UPDATE", "0");
+                if cached_steam_runtime(Path::new(&proton)) {
+                    // UMU can request the latest version before checking
+                    // UMU_RUNTIME_UPDATE. Limit that wait only for a known,
+                    // fully installed runtime and a concrete Proton build.
+                    c.env("UMU_HTTP_TIMEOUT", "1.0")
+                        .env("UMU_HTTP_RETRIES", "0");
+                }
+            }
             c.env("PROTONPATH", proton)
                 .env("GAMEID", crate::desktop::game_id(self.project))
                 .env("STORE", "none")
@@ -587,6 +640,46 @@ pub fn proton_versions() -> Vec<PathBuf> {
     versions
 }
 
+fn cached_steam_runtime(proton: &Path) -> bool {
+    if !proton.is_absolute() {
+        return false;
+    }
+    let Ok(manifest) = fs::read_to_string(proton.join("toolmanifest.vdf")) else {
+        return false;
+    };
+    let app_id = manifest.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        if fields.next()?.trim_matches('"') == "require_tool_appid" {
+            fields.next().map(|value| value.trim_matches('"'))
+        } else {
+            None
+        }
+    });
+    let variant = match app_id {
+        Some("1391110") => "steamrt2",
+        Some("1628350") => "steamrt3",
+        Some("4183110") => "steamrt4",
+        Some("4185400") => "steamrt4-arm64",
+        _ => return false,
+    };
+    let data = if let Some(path) = env::var_os("UMU_FOLDERS_PATH") {
+        PathBuf::from(path)
+    } else if matches!(env::var("container").as_deref(), Ok("flatpak")) {
+        xdg("HOST_XDG_DATA_HOME", ".local/share")
+    } else {
+        xdg("XDG_DATA_HOME", ".local/share")
+    };
+    let runtime = data.join("umu").join(variant);
+    [
+        ".installed.ok",
+        "umu",
+        "toolmanifest.vdf",
+        "pressure-vessel/bin/pressure-vessel-wrap",
+    ]
+    .iter()
+    .all(|path| runtime.join(path).is_file())
+}
+
 fn pin_proton(s: &Settings) -> Result<()> {
     if s.runner != "proton" || !["GE-Proton", "UMU-Proton"].contains(&s.proton.as_str()) {
         return Ok(());
@@ -695,6 +788,15 @@ fn run_managed(
     if TERMINATED.load(Ordering::Relaxed) {
         return Err("Операция остановлена".into());
     }
+    if is_game(executable) {
+        progress(if s.runner == "proton" {
+            "Proton подготавливает запуск игры"
+        } else {
+            "Wine запускает игру"
+        });
+    } else if s.is_launcher(executable) && executable != s.installer {
+        progress("Запускаем официальный лаунчер");
+    }
     let mut child = command
         .spawn()
         .map_err(|e| format!("Не удалось запустить процесс: {e}"))?;
@@ -777,6 +879,8 @@ pub fn execute(
         "runtime-prepare",
         "prepare",
         "install",
+        "game-update",
+        "game-check",
         "launch",
         "play",
         "servers-refresh",
@@ -837,7 +941,9 @@ pub fn execute(
     if action == "mods-preview" {
         return crate::mods::execute(&s, action, args);
     }
-    crate::game::cleanup_legacy(&s)?;
+    if action != "game-check" {
+        crate::game::cleanup_legacy(&s)?;
+    }
     fs::create_dir_all(data_dir().join("logs")).map_err(|e| e.to_string())?;
     println!(
         "ALOL {} · {action} · {}\n{} / {}",
@@ -848,7 +954,22 @@ pub fn execute(
     );
     match action {
         action if action.starts_with("mods-") => crate::mods::execute(&s, action, args)?,
+        "game-update" | "game-check" => {
+            if !args.is_empty() {
+                return Err(
+                    "Выберите игру с помощью --project arizona или --project rodina".into(),
+                );
+            }
+            crate::game_download::run(&s, action == "game-check", || {
+                if !s.prefix_ready() {
+                    prepare(&s)?;
+                    pin_proton(&s)?;
+                }
+                Ok(())
+            })?;
+        }
         "play" => {
+            progress("Проверяем игру и выбранный сервер");
             let mut profile = crate::game::PlayerProfile::load(&s)?;
             if let Some(id) = args.first() {
                 profile.select(id);
@@ -859,7 +980,9 @@ pub fn execute(
             let server = profile.validate_launch()?;
             let plan = crate::game::plan(&s, &profile)?;
             profile.save()?;
-            let actual = resolved_settings(&s);
+            let mut actual = resolved_settings(&s);
+            actual.defer_runtime_updates = true;
+            progress("Проверяем шрифты, компоненты и раскладку");
             ensure_components(&actual)?;
             ensure_language(&actual, false)?;
             ensure_input(&actual)?;
@@ -868,6 +991,7 @@ pub fn execute(
             let options = crate::game_options::GameOptions::load(&s)?;
             options.save()?;
             options.sync(&s)?;
+            progress(&format!("Открываем игру · {}", server.name));
             println!(
                 "Подключение: {} · {}:{}",
                 server.name, server.host, server.port
@@ -885,7 +1009,7 @@ pub fn execute(
         "prepare" => {
             prepare(&s)?;
             pin_proton(&s)?;
-            println!("Окружение готово. Теперь можно установить Arizona.");
+            println!("Окружение готово. Теперь можно установить игру.");
         }
         "install" => {
             if !Path::new(&s.installer).is_file() {
@@ -895,6 +1019,7 @@ pub fn execute(
             pin_proton(&s)?;
             // Reuse the pinned build immediately, without a second network version lookup.
             let current = resolved_settings(&s);
+            progress("Запускаем установщик официального лаунчера");
             run(
                 &current,
                 &s.installer,
@@ -955,7 +1080,7 @@ pub fn execute(
             backup_zone_identifiers(&s)?;
             let n = backup_caches(&s)?;
             println!(
-                "Окружение обновлено. Сохранено папок кэша: {n}.\nДля проверки файлов игры откройте настройки официального лаунчера → восстановление игры."
+                "Окружение обновлено. Сохранено папок кэша: {n}.\nДля проверки файлов нажмите «Обновить игру»."
             );
         }
         "libraries" => ensure_components(&resolved_settings(&s))?,
@@ -997,6 +1122,7 @@ pub fn execute(
 }
 
 fn prepare(s: &Settings) -> Result<()> {
+    progress("Подготавливаем окружение Wine / Proton");
     if s.runner == "proton" && s.proton == "ALOL-Proton" {
         crate::alol_proton::prepare(s, false)?;
     }
@@ -1120,6 +1246,7 @@ fn ensure_components(s: &Settings) -> Result<()> {
         "Автоматическая установка компонентов: {}",
         missing.join(", ")
     );
+    progress("Устанавливаем шрифты и Visual C++");
     let args: Vec<_> = std::iter::once("-q").chain(missing).collect();
     if s.runner == "proton" {
         run(s, "winetricks", &args)?;
@@ -1331,7 +1458,7 @@ pub fn doctor(s: &Settings) -> String {
             )
         }
     ));
-    out.push_str("\nGE-Proton запускается через UMU; первый запуск требует интернета и нескольких ГБ.\nПрефиксы Wine и Proton раздельные. Проверка файлов игры — в официальном лаунчере.\nПосле успешной подготовки сборка Proton закрепляется. Для обновления выберите GE-Proton снова.\nЕсли лаунчер пустой: включите «Отключить GPU в лаунчере».\nЕсли игра не отображается: попробуйте WineD3D.\n");
+    out.push_str("\nGE-Proton запускается через UMU; первый запуск требует интернета и нескольких ГБ.\nПрефиксы Wine и Proton раздельные. Проверка файлов игры — alol game-check.\nПосле успешной подготовки сборка Proton закрепляется. Для обновления выберите GE-Proton снова.\nЕсли лаунчер пустой: включите «Отключить GPU в лаунчере».\nЕсли игра не отображается: попробуйте WineD3D.\n");
     out.push_str(&format!(
         "\nСовместимый запуск лаунчера: {}\nXWayland / DISPLAY: {}\nПроверка обновлений: {}\n",
         s.launcher_compatibility,

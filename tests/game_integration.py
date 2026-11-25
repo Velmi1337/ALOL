@@ -90,7 +90,8 @@ class DirectGame(unittest.TestCase):
 
     def test_imports_nickname_and_server_and_launches_game_without_electron(self):
         before=len(self.calls())
-        result=self.run_alol('play')
+        result=self.run_alol('play', UMU_RUNTIME_UPDATE='1',
+                             LC_ADDRESS='de_DE.UTF-8', LC_CTYPE='C.UTF-8')
         calls=self.calls()[before:]
         self.assertEqual(len(calls),1)
         args=calls[0]['args']
@@ -103,13 +104,46 @@ class DirectGame(unittest.TestCase):
         self.assertEqual(args[args.index('-cdn')+1],'0,0,0')
         for flag in ['-arizona','-window','-modern_scale','-widescreen','-custom_fx']:self.assertIn(flag,args)
         self.assertEqual(calls[0]['cwd'],str(self.game))
+        self.assertEqual(calls[0]['runtime_update'], '0')
+        self.assertIn('Proton подготавливает запуск игры', result.stdout)
+        self.assertNotIn('Игровой процесс запущен', result.stdout)
         self.assertEqual(calls[0]['lc_all'],'ru_RU.UTF-8')
+        self.assertEqual(calls[0]['host_lc_all'],'ru_RU.UTF-8')
+        self.assertIsNone(calls[0]['lc_address'])
+        self.assertIsNone(calls[0]['lc_ctype'])
         self.assertNotIn('private-existing-identity',result.stdout+result.stderr)
         self.assertNotIn('keep-existing-password',result.stdout+result.stderr)
         profile=json.loads(self.player.read_text())
         self.assertEqual(profile['server_id'],'30');self.assertEqual(profile['nickname'],'Native_Name')
         self.assertNotIn('logins',profile)
         self.assertNotIn('-x',args)
+
+    def test_cached_steam_runtime_limits_optional_umu_request_on_play(self):
+        proton = self.root/'local-proton'
+        proton.mkdir()
+        (proton/'proton').touch()
+        (proton/'toolmanifest.vdf').write_text(
+            '"manifest"\n{\n    "require_tool_appid" "4183110"\n}\n')
+        self.write_config(proton=str(proton))
+        umu_data = self.root/'umu-data'
+        runtime = umu_data/'umu/steamrt4'
+        (runtime/'pressure-vessel/bin').mkdir(parents=True)
+        for path in ('umu', 'toolmanifest.vdf', 'pressure-vessel/bin/pressure-vessel-wrap'):
+            (runtime/path).touch()
+        network = dict(UMU_FOLDERS_PATH=str(umu_data), UMU_HTTP_TIMEOUT='5', UMU_HTTP_RETRIES='3')
+
+        self.run_alol('play', **network)
+        uncached = self.game_calls()[-1]
+        self.assertEqual((uncached['umu_timeout'], uncached['umu_retries']), ('5', '3'))
+
+        (runtime/'.installed.ok').touch()
+        self.run_alol('play', **network)
+        cached = self.game_calls()[-1]
+        self.assertEqual((cached['umu_timeout'], cached['umu_retries']), ('1.0', '0'))
+
+        self.run_alol('repair', **network)
+        repair = self.calls()[-1]
+        self.assertEqual((repair['umu_timeout'], repair['umu_retries']), ('5', '3'))
 
     def test_remembers_nickname_for_each_server_across_processes(self):
         self.run_alol('play',arguments=('1','First_Name'))
@@ -331,5 +365,142 @@ class DirectGame(unittest.TestCase):
         self.assertEqual(helper.read_text(),'-- user-owned script')
         self.assertNotIn('-x',self.game_calls()[-1]['args'])
         self.assertNotIn('retired-test-secret',result.stdout+result.stderr)
+
+class GameDelivery(unittest.TestCase):
+    tearDown = base.Workflow.tearDown
+    write_config = base.Workflow.write_config
+    run_alol = base.Workflow.run_alol
+    calls = base.Workflow.calls
+    prefix = base.Workflow.prefix
+
+    """Use the official manifest shape with small, offline game file fixtures."""
+
+    def setUp(self):
+        base.Workflow.setUp(self)
+        self.mapping = {}
+        self.map_file = self.root / 'delivery-map.json'
+        self.requests = self.root / 'delivery-requests.txt'
+        self.env.update(ALOL_TEST_DELIVERY_MAP=str(self.map_file),
+                        ALOL_TEST_DELIVERY_REQUESTS=str(self.requests))
+        curl = self.bin / 'curl'
+        curl.write_text("""#!/usr/bin/python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+url = args[-1]
+with open(os.environ['ALOL_TEST_DELIVERY_REQUESTS'], 'a') as stream:
+    print(url, file=stream)
+value = json.loads(pathlib.Path(os.environ['ALOL_TEST_DELIVERY_MAP']).read_text()).get(url)
+if value is None:
+    sys.exit(22)
+pathlib.Path(args[args.index('--output') + 1]).write_text(value)
+""")
+        curl.chmod(0o755)
+
+    def fixture(self, files, project='arizona'):
+        cdn = 'https://pc.az-ins.com/release' if project == 'arizona' else 'https://pc.rod-ins.com/release'
+        self.mapping[cdn + '/game.json'] = json.dumps({'data': files})
+        self.map_file.write_text(json.dumps(self.mapping))
+
+    def entry(self, name, contents, kind='file', **fields):
+        data = contents.encode()
+        return dict(type=kind, name=name, size=len(data),
+                    hash=hashlib.md5(data).hexdigest(), **fields)
+
+    def game_folder(self, project='arizona'):
+        return self.prefix / 'drive_c/Arizona Games Launcher/bin' / project
+
+    def requested(self):
+        return self.requests.read_text().splitlines()
+
+    def add_file(self, project, name, contents):
+        host = 'pc.az-ins.com' if project == 'arizona' else 'pc.rod-ins.com'
+        self.mapping[f'https://{host}/release/game/{name}'] = contents
+
+    def test_rodina_installs_and_launches_without_official_launcher(self):
+        base_url = 'https://pc.rod-ins.com/release'
+        self.add_file('rodina', 'gta_sa.exe', 'game')
+        self.add_file('rodina', 'models/UI%20file.txt', 'interface')
+        self.fixture([
+            self.entry('gta_sa.exe', 'game', 'check'),
+            {'type':'dir', 'name':'models', 'data':[self.entry('UI file.txt', 'interface')]},
+        ], 'rodina')
+        self.run_alol('--project', arguments=('rodina', 'game-check'))
+        self.assertFalse(self.game_folder('rodina').exists())
+        self.assertEqual(self.requested(), [base_url + '/game.json'])
+        result = self.run_alol('--project', arguments=('rodina', 'game-update'))
+        self.assertIn('Загрузка · файл', result.stdout)
+        self.assertIn('Подготавливаем окружение', result.stdout)
+        game = self.game_folder('rodina')
+        self.assertEqual((game/'models/UI file.txt').read_text(), 'interface')
+        self.assertFalse((game/'.alol-game-update').exists())
+        self.assertFalse((game.parent.parent/'Arizona Games Launcher.exe').exists())
+        self.assertFalse(self.game_folder().exists())
+        self.run_alol('--project', arguments=('rodina', 'play'))
+        self.assertEqual(self.calls()[-1]['args'][0], str(game/'gta_sa.exe'))
+        self.assertIn('-rodina', self.calls()[-1]['args'])
+        self.assertFalse(any('Arizona Games Launcher.exe' in c['args'][0] for c in self.calls()))
+
+    def test_game_update_preserves_mods_and_resources_and_reuses_verified_files(self):
+        self.run_alol('install')
+        game = self.game_folder()
+        game.mkdir(parents=True)
+        for name, contents in [('gta_sa.exe', 'old!'), ('mouse.png', 'custom mouse'),
+                               ('script.asi', 'modded'), ('config.ini', 'my config')]:
+            (game/name).write_text(contents)
+        native = self.prefix/'drive_c/users/steamuser/AppData/Roaming/arizona-launcher/settings.json'
+        native.parent.mkdir(parents=True)
+        preferences = json.dumps({'installedMods':{'arizona':{'123':{'installedFilesRelativePaths':['script.asi']}}}})
+        native.write_text(preferences)
+        self.add_file('arizona', 'gta_sa.exe', 'new!')
+        self.add_file('arizona', 'trees.img_default', 'trees')
+        self.fixture([
+            self.entry('gta_sa.exe', 'new!', 'check'),
+            self.entry('mouse.png', 'original mouse', 'res'),
+            self.entry('script.asi', 'original'),
+            self.entry('trees.img_default', 'trees', install_as='trees.img', variant_tag='default'),
+            self.entry('trees.img_future', 'trees new', install_as='trees.img', variant_tag='future'),
+            {'type':'delete','name':'config.ini'},
+        ])
+        # Avoid reliance on the graphics defaults of a particular release.
+        (self.config.parent/'game-options.json').write_text(json.dumps({'memory':2048,'options':{}}))
+        self.run_alol('game-update')
+        self.assertEqual((game/'gta_sa.exe').read_text(), 'new!')
+        self.assertEqual((game/'trees.img').read_text(), 'trees')
+        self.assertEqual((game/'script.asi').read_text(), 'modded')
+        self.assertEqual((game/'mouse.png').read_text(), 'custom mouse')
+        self.assertEqual((game/'config.ini').read_text(), 'my config')
+        self.assertEqual(native.read_text(), preferences)
+        self.requests.unlink()
+        self.run_alol('game-update')
+        self.assertEqual(self.requested(), ['https://pc.az-ins.com/release/game.json'])
+
+    def test_failed_update_keeps_current_file_and_retry_uses_verified_download(self):
+        self.run_alol('install')
+        game = self.game_folder()
+        game.mkdir(parents=True)
+        (game/'gta_sa.exe').write_text('old game')
+        self.add_file('arizona', 'gta_sa.exe', 'new game')
+        self.add_file('arizona', 'core.asi', 'bad bytes')
+        self.fixture([self.entry('gta_sa.exe', 'new game'), self.entry('core.asi', 'valid DLL')])
+        result = self.run_alol('game-update', success=False)
+        self.assertIn('core.asi', result.stderr)
+        self.assertEqual((game/'gta_sa.exe').read_text(), 'new game')
+        self.assertFalse((game/'core.asi').exists())
+        self.assertTrue((game/'.alol-game-update').is_dir())
+        self.run_alol('play', success=False)
+        self.requests.unlink()
+        self.mapping['https://arz-pc.react-group.tech/release/game/core.asi'] = 'valid DLL'
+        self.map_file.write_text(json.dumps(self.mapping))
+        self.run_alol('game-update')
+        self.assertEqual((game/'core.asi').read_text(), 'valid DLL')
+        self.assertFalse((game/'.alol-game-update').exists())
+        self.assertNotIn('https://pc.az-ins.com/release/game/gta_sa.exe', self.requested())
+
+    def test_third_party_paths_in_manifest_are_rejected_before_writes(self):
+        self.fixture([self.entry('gta_sa.exe','game'), self.entry('config','bad', install_as='../config')])
+        self.run_alol('game-update',success=False)
+        self.assertFalse(self.game_folder().exists())
+        self.assertTrue(all(url.endswith('/game.json') for url in self.requested()))
+
 
 if __name__=='__main__':unittest.main(verbosity=2)

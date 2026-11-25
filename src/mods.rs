@@ -153,14 +153,17 @@ pub(crate) fn official_settings(s: &Settings) -> Option<PathBuf> {
     None
 }
 pub fn game_path(s: &Settings) -> Result<PathBuf> {
-    let exe = s
+    let launcher_directory = s
         .find_executable()
-        .ok_or("Сначала установите официальный лаунчер Arizona")?;
-    let mut game = exe
-        .parent()
-        .ok_or("Не найдена папка лаунчера")?
-        .join("bin")
-        .join(s.project.id());
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let mut game = if let Some(directory) = launcher_directory {
+        target(&directory, &Path::new("bin").join(s.project.id()))?
+    } else {
+        target(
+            &s.prefix(),
+            &Path::new("drive_c/Arizona Games Launcher/bin").join(s.project.id()),
+        )?
+    };
     if let Some(path) = official_settings(s)
         && let Ok(settings) = read_json(&path)
     {
@@ -173,15 +176,15 @@ pub fn game_path(s: &Settings) -> Result<PathBuf> {
             .get(..3)
             .is_some_and(|v| v.eq_ignore_ascii_case("C:/"))
         {
-            game = s
-                .prefix()
-                .join("drive_c")
-                .join(safe_relative(&location[3..])?);
+            game = target(
+                &s.prefix(),
+                &Path::new("drive_c").join(safe_relative(&location[3..])?),
+            )?;
         } else if location
             .get(..3)
             .is_some_and(|v| v.eq_ignore_ascii_case("Z:/"))
         {
-            game = PathBuf::from(format!("/{}", &location[3..]));
+            game = Path::new("/").join(safe_relative(&location[3..])?);
         }
     }
     if game.is_symlink() {
@@ -193,7 +196,7 @@ pub fn game_path(s: &Settings) -> Result<PathBuf> {
 pub fn game_dir(s: &Settings) -> Result<PathBuf> {
     let game = game_path(s)?;
     if !game.is_dir() {
-        return Err("Сначала скачайте игру через официальный лаунчер".into());
+        return Err("Сначала установите игру из ALOL".into());
     }
     game.canonicalize().map_err(err)
 }
@@ -303,30 +306,7 @@ pub(crate) fn fetch(url: &str, out: &Path, limit: u64) -> Result<()> {
     fetch_with_timeout(url, out, limit, 180)
 }
 pub(crate) fn fetch_with_timeout(url: &str, out: &Path, limit: u64, seconds: u32) -> Result<()> {
-    if !url.starts_with("https://") {
-        return Err("Адрес загрузки должен использовать HTTPS".into());
-    }
-    fs::create_dir_all(out.parent().ok_or("Нет папки загрузки")?).map_err(err)?;
-    let status = crate::portable::command("curl")
-        .args([
-            "--fail",
-            "--location",
-            "--silent",
-            "--show-error",
-            "--connect-timeout",
-            "8",
-            "--max-time",
-            &seconds.to_string(),
-            "--proto",
-            "=https",
-            "--proto-redir",
-            "=https",
-            "--max-filesize",
-            &limit.to_string(),
-            "--output",
-        ])
-        .arg(out)
-        .arg(url)
+    let status = download_command(url, out, limit, seconds)?
         .status()
         .map_err(|e| format!("Не запустить curl: {e}"))?;
     if !status.success() {
@@ -337,6 +317,44 @@ pub(crate) fn fetch_with_timeout(url: &str, out: &Path, limit: u64, seconds: u32
         return Err("Загрузка превышает лимит размера".into());
     }
     Ok(())
+}
+
+pub(crate) fn download_command(
+    url: &str,
+    out: &Path,
+    limit: u64,
+    seconds: u32,
+) -> Result<std::process::Command> {
+    if !url.starts_with("https://") {
+        return Err("Адрес загрузки должен использовать HTTPS".into());
+    }
+    fs::create_dir_all(out.parent().ok_or("Нет папки загрузки")?).map_err(err)?;
+    let mut command = crate::portable::command("curl");
+    command
+        .args([
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--connect-timeout",
+            "8",
+            "--max-time",
+            &seconds.to_string(),
+            "--speed-limit",
+            "1024",
+            "--speed-time",
+            "30",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--max-filesize",
+            &limit.to_string(),
+            "--output",
+        ])
+        .arg(out)
+        .arg(url);
+    Ok(command)
 }
 fn fetch_json(path: &str, out: &Path) -> Result<Value> {
     let mut last = String::new();
@@ -419,6 +437,14 @@ fn state(s: &Settings, id: &str) -> Result<Value> {
         return Err("Папка мода является ссылкой".into());
     }
     read_json(&d.join("state.json"))
+}
+
+pub(crate) fn active_flags(s: &Settings) -> Result<Vec<String>> {
+    installed(s)?
+        .into_iter()
+        .filter(|entry| entry.active)
+        .map(|entry| Ok(state(s, &entry.id)?.get("meta").get("flag").text()))
+        .collect()
 }
 fn write_state(s: &Settings, v: &Value) -> Result<()> {
     write_json(&mod_dir(s, &v.get("id").text())?.join("state.json"), v)
@@ -700,7 +726,7 @@ fn staging() -> Result<Staging> {
     fs::create_dir(&p).map_err(err)?;
     Ok(Staging(p))
 }
-fn url_path(p: &Path) -> String {
+pub(crate) fn url_path(p: &Path) -> String {
     p.to_string_lossy()
         .replace('\\', "/")
         .bytes()
@@ -712,6 +738,38 @@ fn url_path(p: &Path) -> String {
             }
         })
         .collect()
+}
+
+pub(crate) fn protected_game_files(s: &Settings) -> Result<BTreeSet<String>> {
+    let mut paths = BTreeSet::new();
+    let mut protect = |path: &Value| -> Result<()> {
+        paths.insert(
+            safe_relative(&path.text())?
+                .to_string_lossy()
+                .to_lowercase(),
+        );
+        Ok(())
+    };
+    for entry in installed(s)? {
+        let value = state(s, &entry.id)?;
+        if value.get("status").text() == "installing" {
+            return Err("Сначала завершите прерванную операцию с модами во вкладке «Моды»".into());
+        }
+        if entry.active {
+            for file in value.get("files").array() {
+                protect(file.get("path"))?;
+            }
+        }
+    }
+    let official = crate::game::official(s)?;
+    if let Value::Object(entries) = official.get("installedMods").get(s.project.id()) {
+        for entry in entries.values() {
+            for path in entry.get("installedFilesRelativePaths").array() {
+                protect(path)?;
+            }
+        }
+    }
+    Ok(paths)
 }
 fn manifest(
     v: &Value,

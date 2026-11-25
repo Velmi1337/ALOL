@@ -21,9 +21,13 @@ exe = args[0]
 with open(os.environ['ALOL_TEST_TRACE'], 'a') as f:
     f.write(json.dumps({'args': args, 'prefix': str(p), 'proton': os.environ.get('PROTONPATH'),
         'verb': os.environ.get('PROTON_VERB'), 'wined3d': os.environ.get('PROTON_USE_WINED3D'),
+        'runtime_update': os.environ.get('UMU_RUNTIME_UPDATE'),
+        'umu_timeout': os.environ.get('UMU_HTTP_TIMEOUT'),
+        'umu_retries': os.environ.get('UMU_HTTP_RETRIES'),
         'winearch': os.environ.get('WINEARCH'), 'prime': os.environ.get('DRI_PRIME'),
         'install_path': os.environ.get('STEAM_COMPAT_INSTALL_PATH'), 'cwd': os.getcwd(),
         'lc_all': os.environ.get('LC_ALL'), 'host_lc_all': os.environ.get('HOST_LC_ALL'), 'lang': os.environ.get('LANG'), 'locpath': os.environ.get('LOCPATH'),
+        'lc_address': os.environ.get('LC_ADDRESS'), 'lc_ctype': os.environ.get('LC_CTYPE'),
         'ld_library_path': os.environ.get('LD_LIBRARY_PATH'), 'gtk_path': os.environ.get('GTK_PATH'),
         'gdk_pixbuf': os.environ.get('GDK_PIXBUF_MODULE_FILE'),
         'xim': os.environ.get('XMODIFIERS'), 'gtk_im': os.environ.get('GTK_IM_MODULE'), 'qt_im': os.environ.get('QT_IM_MODULE'),

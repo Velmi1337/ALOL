@@ -1,13 +1,14 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- English documentation for ALOL 1.0.1. -->
+<!-- English documentation for ALOL 1.1.0. -->
 # ALOL — Arizona RP and Rodina RP on Linux
 
 **Arizona Launcher On Linux. A native Rust and GTK 3 launcher.**
 
 [Русский](README.md) · [Project website](https://velmi1337.github.io/alol/) · [AUR · alol](https://aur.archlinux.org/packages/alol) · [Download](https://github.com/Velmi1337/ALOL/releases/latest) · [Report a problem](https://github.com/Velmi1337/ALOL/issues) · [Telegram](https://t.me/alolinux)
 
-**ALOL 1.0.1 is a stable bugfix release.** It manages Arizona RP and Rodina RP environments on **Linux x86_64** through **Wine or Proton**.
-A Material 3 Expressive (MD3E) interface brings light/dark themes, Google Sans, separate game settings, mod management and a searchable operation log.
+**ALOL 1.1.0 installs and updates Arizona RP and Rodina RP directly on Linux x86_64.**
+It runs both games with **Wine or Proton** and has a Material 3 Expressive (MD3E)
+interface with light and dark themes, separate game settings, mod management and a searchable log.
 Arizona nicknames are saved per server; Rodina asks for the name in-game.
 Available as **[alol on AUR](https://aur.archlinux.org/packages/alol)**, AppImage and native Arch/CachyOS and Fedora packages.
 It is an independent project and is not affiliated with Arizona Games. The game and Windows components are not bundled.
@@ -33,12 +34,12 @@ Enable `multilib` and install `base-devel`. Your AUR helper resolves the build
 and runtime dependencies. Update with `yay -Syu` or `paru -Syu`.
 
 Choose a package from the [latest GitHub release](https://github.com/Velmi1337/ALOL/releases/latest).
-The commands below use the currently published `1.0.1` filenames; use the filename of the version you downloaded.
+The commands below use the currently published `1.1.0` filenames; use the filename of the version you downloaded.
 
 ### Arch Linux / CachyOS
 
 ```sh
-sudo pacman -U ./alol-1.0.1-1-x86_64.pkg.tar.zst
+sudo pacman -U ./alol-1.1.0-1-x86_64.pkg.tar.zst
 ```
 
 Enable `multilib` and install suitable 32-bit and 64-bit graphics drivers for your system.
@@ -46,7 +47,7 @@ Enable `multilib` and install suitable 32-bit and 64-bit graphics drivers for yo
 ### Fedora 44+
 
 ```sh
-sudo dnf install ./alol-1.0.1-1.fc44.x86_64.rpm
+sudo dnf install ./alol-1.1.0-1.fc44.x86_64.rpm
 ```
 
 The RPM installs its Wine and winetricks dependencies. A Russian system locale is not required.
@@ -63,8 +64,8 @@ The detailed guides currently use Russian.
 For Linux x86_64 with glibc 2.35 or newer (Ubuntu 22.04+):
 
 ```sh
-chmod +x alol-1.0.1-x86_64.AppImage
-./alol-1.0.1-x86_64.AppImage
+chmod +x alol-1.1.0-x86_64.AppImage
+./alol-1.1.0-x86_64.AppImage
 ```
 
 GTK libraries are bundled. Playing still requires UMU/Proton or Wine, winetricks,
@@ -73,19 +74,18 @@ launch with `--appimage-extract-and-run`. In-app updates replace the whole AppIm
 
 ## First game launch
 
-1. Download the installer from the [official Arizona website](https://arizona-rp.com/).
-2. Select the installer `.exe` in ALOL and choose the install action to prepare the environment.
-3. Use the official launcher to download the game.
-4. Close the official launcher, select the game and server, then launch from ALOL.
-   Enter the nickname in ALOL for Arizona; Rodina uses its in-game character screen.
+1. Select Arizona RP or Rodina RP.
+2. Click **Install game**. ALOL downloads the game files and prepares Wine or Proton.
+3. Select a server and click **Play**. Enter the nickname in ALOL for Arizona and in-game for Rodina.
 
-The official launcher remains responsible for game downloads, updates and file verification.
-Your game-account password is entered in the game; ALOL does not store it.
+**Update game** checks files and downloads any that are missing or changed.
+**Open Arizona launcher** starts the official launcher if installed.
+Game updates are checked in the background when ALOL opens or you click **Play**.
 
 ## Features
 
 - **Two games:** switch between Arizona RP and Rodina RP, with separate servers, settings and mods.
-- **Material 3 Expressive:** adaptive navigation, Google Sans, light/dark themes and instant preference saving.
+- **Material 3 Expressive:** six accent colors, adjustable text, light and dark themes, and optional bottom navigation.
 - **Game launch:** per-server Arizona nicknames; Rodina character naming stays in-game.
 - **Environment:** documented Wine/Proton setup, fonts and Visual C++ preparation.
 - **ALOL-Proton:** the Arizona launch profile and EN/RU indicator fix in one ready-to-download runtime; [setup](docs/proton.md).
